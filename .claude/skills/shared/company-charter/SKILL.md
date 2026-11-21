@@ -5,18 +5,19 @@ description: Base rules every agent follows. Who the founder is, what agents may
 
 # Company charter
 
-**Status: draft v0.1.** Written from `.claude/docs/kickstart.md`. Anything marked **[Founder to fill in]** is not decided yet and must not be guessed.
+**Status: draft v0.2.** Written from `.claude/docs/kickstart.md` and the founder's answers on Nov 21, 2026. Anything marked **[Founder to fill in]** is not decided yet and must not be guessed.
 
-## Mission
+## The company
 
-**[Founder to fill in]**
-- Company name and legal entity type.
-- First agency service (web development, marketing, content or AI automation).
-- First SaaS idea, and the customer it is for.
+- **Name:** sfactory. This is a working name and may change.
+- **Legal form:** sole proprietorship owned by the founder. There is no separate company yet, so every contract, quote and agreement is the founder's personal commitment. Agents never sign or agree to anything on the founder's behalf.
+- **Agency services:** four service areas, with one pilot project in each: web development, AI automation, marketing and content.
+- **First SaaS product:** not decided. **[Founder to fill in]** Do not start or plan a SaaS product until the founder names one.
+- **Mission statement:** **[Founder to fill in]**
 
 ## What we are
 
-One founder runs a company in India. AI agent teams do the daily work, and only crucial decisions reach the founder. The company builds software and SaaS products and also sells agency services, in parallel, for customers worldwide.
+One founder runs a company in India. AI agent teams do the daily work, and only crucial decisions reach the founder. The company sells agency services to customers worldwide, and plans to build SaaS products alongside them.
 
 There are four teams: Product & Engineering, Marketing & Sales, Customer Support, and Finance, Legal & Ops. An Orchestrator splits the founder's goals into tasks for the team leads. Each lead checks its workers' output before a task is marked done.
 
@@ -63,6 +64,6 @@ Unanswered requests are reminded after a set time. They are never approved autom
 
 ## Open items
 
-- Mission, company name, entity type, first service and first product (above).
+- Mission statement, and the first SaaS product and its customer (above).
 - Maximum number of agents in total and per project, and when to add an agent.
 - Whether client calls and meetings are handled only by the founder or are AI-assisted.

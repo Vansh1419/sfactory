@@ -71,9 +71,31 @@ const checks = [
     id: 'preload-no-raw-ipcrenderer',
     // Exposing ipcRenderer itself lets the renderer call any channel.
     check() {
-      const src = read('src/preload.js');
+      // The import line (`const { contextBridge, ipcRenderer } = require('electron')`) is fine; ignore it.
+      const src = read('src/preload.js').replace(/^.*require\(\s*['"]electron['"]\s*\).*$/gm, '');
       const raw = /[{,:]\s*ipcRenderer\s*[,}]/.test(src);
       return raw ? { pass: false, detail: 'ipcRenderer is exposed to the renderer directly' } : { pass: true };
+    },
+  },
+  {
+    id: 'preload-exposes-only-the-planned-api',
+    // window.api is the renderer's whole view of the runtime (PLAN.md step 1.2):
+    // two globals, and IPC only on two fixed channel names written as literals.
+    check() {
+      const src = read('src/preload.js');
+      const names = [...src.matchAll(/exposeInMainWorld\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+      const extraGlobals = names.filter((n) => !['versions', 'api'].includes(n));
+      const calls = [...src.matchAll(/ipcRenderer\.(\w+)\(\s*(['"][^'"]*['"])?/g)].map((m) => ({ method: m[1], channel: m[2]?.slice(1, -1) }));
+      const allowedChannels = ['runtime:invoke', 'runtime:event'];
+      const allowedMethods = ['invoke', 'on', 'removeListener'];
+      const badMethods = calls.filter((c) => !allowedMethods.includes(c.method)).map((c) => c.method);
+      const badChannels = calls.filter((c) => !c.channel || !allowedChannels.includes(c.channel)).map((c) => c.channel ?? '(not a literal)');
+      const problems = [
+        ...extraGlobals.map((n) => `exposes window.${n}`),
+        ...badMethods.map((m) => `uses ipcRenderer.${m}`),
+        ...badChannels.map((c) => `uses channel ${c}`),
+      ];
+      return problems.length === 0 ? { pass: true } : { pass: false, detail: problems.join('; ') };
     },
   },
   {

@@ -74,21 +74,26 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 
 ### Phase 0: Foundation (days 1–2)
 
-**0.1 Accounts and keys** (half a day) — status: `.env.example` done; the accounts and keys **need the founder**
-- Create the GitHub repo and the Supabase project. *(founder)*
-- Get a Groq key (Gemini and OpenRouter are deferred) and check whether Ollama is installed locally. Create the Telegram bot with BotFather and find your chat ID. *(founder)*
-- Put every key in `.env` (gitignored). `.env.example` with names only: **done**, and an invariant checks it never holds values.
-- **Done when:** each key works from a one-line test call, and `git status` shows no secret files.
+**0.1 Accounts and keys** (half a day) — status: **done** (all required checks pass, verified Nov 21, 2026)
+- [x] GitHub repo: `Vansh1419/sfactory`, pushed and in sync (visibility is an open decision, see below).
+- [x] Ollama installed and running locally (11 models). Claude Code CLI present for the last fallback.
+- [x] `.env.example` with names only, and an invariant checks it never holds values.
+- [x] `npm run check:keys` (`scripts/check-keys.js`): one read-only call per key, never prints a secret, refuses to send the Supabase service key anywhere except `*.supabase.co` or localhost, and `-- --find-telegram-chat` lists your chat ID. Unit-tested; failure paths confirmed against the real Groq and Telegram APIs with fake keys.
+- [x] **Supabase project**: verified Nov 21, 2026. The URL is a valid project URL and the key is a new-style secret key (`sb_secret_…`), which is the right kind for the runtime. (The check proves the key is accepted; it does not yet prove the key's permissions.)
+- [x] **Groq key**: verified Nov 21, 2026 (key accepted, 11 models available). Gemini and OpenRouter are deferred.
+- [x] **Telegram bot**: verified Nov 21, 2026. The token is accepted, and the founder chat ID is a private chat the bot can see. (An earlier token was rejected with `401 Unauthorized` and was replaced.)
+- [x] **`.env` created and gitignored.**
+- **Done when:** `npm run check:keys` reports every required item OK (Groq, Telegram token and chat ID, Supabase) and "Secrets stay out of git" is OK.
 
-**0.2 Repo restructure and tooling** (one day) — status: **done** (the `npm start` window check is manual)
+**0.2 Repo restructure and tooling** (one day) — status: **done**, all four conditions verified Nov 21, 2026 (including `npm start` opening the window, checked by launching it and reading the page)
 - Folders `src/runtime/`, `src/shared/`, `config/mcp/` and `.claude/skills/` created (empty, with `.gitkeep`, until their steps). Sources stay at `src/main.js` and `src/preload.js`; `package.json` `main` is the built `out/main/main.js`.
 - Renderer bundler: **done.** `electron-vite` 6 with Vite 8, React 19 and Tailwind CSS 4 (`@tailwindcss/vite`), configured in `electron.vite.config.mjs`. Scripts: `dev`, `build`, `start` (preview of the production build). The production CSP stays strict; a dev-only plugin relaxes it under `electron-vite dev` only.
 - `node:test` and the `npm test` script: **done** (tests of the eval runner).
 - The check that fails if anything under `src/runtime/` imports `electron`: **done** (`invariants` suite).
 - **Done when:** `npm run build` succeeds, `npm start` opens the window, `npm test` passes, and the import check passes.
 
-**0.3 Charter and docs** (half a day) — status: draft written; **needs the founder** to fill in the mission
-- Company charter: **draft v0.1 written** at `.claude/skills/shared/company-charter/SKILL.md` from the kickstart (rules for every agent, what always needs the founder, the 7-field approval format). The mission, company name, entity type, first service and first product are marked **[Founder to fill in]**, not guessed. This becomes the shared base prompt.
+**0.3 Charter and docs** (half a day) — status: **done** except the mission statement and the first SaaS idea, which the founder has not decided (both are marked in the charter, not guessed)
+- Company charter: **draft v0.2** at `.claude/skills/shared/company-charter/SKILL.md` (rules for every agent, what always needs the founder, the 7-field approval format). Filled in on Nov 21, 2026 from the founder's answers: company name sfactory (working name), sole proprietorship, four agency services with one pilot project in each (web development, AI automation, marketing, content). Still **[Founder to fill in]**: the mission statement and the first SaaS idea. This becomes the shared base prompt.
 - `CLAUDE.md` updated with the new commands and structure and links to `PLAN.md` and `EVALS.md`: **done**.
 - **Done when:** the charter is in `.claude/skills/shared/company-charter/SKILL.md` and `CLAUDE.md` matches the repo.
 
@@ -108,17 +113,27 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 
 ### Phase 1: Approval spine (days 3–7)
 
-**1.1 Database schema** (one day)
-- Write migrations for `tasks`, `agents`, `decisions`, `audit_log`, `memory`, `clients`, `projects`, `agent_events`, `pods`, `pod_members` and `scaling_rules`.
-- Add row-level security so a pod can only read its own rows. Add pgvector for `memory`.
-- Add seed data for one fake pod and one fake agent.
-- **Done when:** migrations apply to a clean Supabase project, and a test shows a query scoped to pod A cannot return pod B's rows.
+**1.1 Database schema** (one day) — status: migrations written and **passing 21 of 21 evals**; applying them to your Supabase project **needs the founder** (below)
+- [x] Migrations in `supabase/migrations/`, split so each can be reviewed alone: `20261121000000_core_schema.sql` (the 11 tables, pgvector on `memory`), `20261121000100_row_level_security.sql` (who can see what) and `20261121000200_integrity_rules.sql` (rules that hold for everyone).
+- [x] Seed in `supabase/seed.sql`: one fake client, project, pod and agent, all labelled `[seed]`. Dev only and not a migration, so it never reaches your project unless run on purpose.
+- [x] Pod isolation model: the runtime uses the service key, which bypasses row-level security and is trusted. The renderer never touches the database. A pod-scoped client (step 3.2) connects as `authenticated` with a JWT carrying a `pod_id` claim, and every policy is keyed on it. A missing claim sees nothing, `anon` has no access at all, and `scaling_rules` is service-key only.
+- [x] Rules enforced in the database, not only in code: pods can file requests but never approve them; the audit log is append-only even for the table owner; approved, rejected and cancelled decisions are frozen; a decision's card, action, category, pod and amounts cannot change after filing; a card must have all seven fields; decisions are never deleted. (Pods with audit entries cannot be deleted either: close them instead.)
+- [x] Evals: the `database-schema` suite (21 cases) runs the migrations on a real in-process Postgres with `pgvector`, then attacks them as a pod agent, with no claim, as `anon`, as the runtime and as the table owner. Checked by mutation: 8 realistic mistakes introduced one at a time, all caught.
+- [x] Apply tooling (decided Nov 21, 2026: a Supabase access token): `npm run db:migrate` (`scripts/db-migrate.js`) applies the migrations through Supabase's management API. `-- --dry-run` changes nothing. Applied migrations are recorded in `supabase_migrations.schema_migrations` (the table the Supabase CLI uses), each migration and its record in one request so they succeed or fail together. It refuses to run on a project whose public schema already has tables, refuses out-of-order migrations, talks only to `api.supabase.com`, and never prints the token. Tested on a real in-process Postgres (9 tests), including failure and atomicity.
+- [ ] **Apply to your Supabase project** *(founder, two steps)*: (1) create a personal access token at https://supabase.com/dashboard/account/tokens and add `SUPABASE_ACCESS_TOKEN=sbp_...` to `.env`; (2) tell me, and I run `npm run db:migrate -- --dry-run`, then `npm run db:migrate`, then `npm run check:db`. The token can manage every project on your account, so delete it in the dashboard once the migrations are applied (create a new one for later migrations). Do not run the seed on the real project.
+- **Done when:** the migrations apply to your Supabase project (`npm run check:db` reports all 11 tables), and the `database-schema` eval shows a query scoped to pod A cannot return pod B's rows (**met locally**; the real-project check is the open item).
 
-**1.2 Runtime skeleton and IPC** (half a day)
-- Main process starts and stops the runtime. Runtime loads config and env, and exposes a small command and event interface.
-- Preload exposes a narrow `window.api` (`decisions.list`, `decisions.resolve`, `agents.pause`, event subscription).
-- Add an `audit_log` writer used by everything that follows.
-- **Done when:** the renderer calls `window.api` and gets a response from the runtime, and the call appears in `audit_log`.
+**1.2 Runtime skeleton and IPC** (half a day) — status: **built and verified** (23 of 23 `runtime-core` evals, 8 integration tests, and the real app driven end to end); the final check against your real Supabase project waits for the migrations
+- [x] Runtime in `src/runtime/` (never imports `electron`): `config.js` (validates settings, never prints values), `store/rest.js` (Supabase REST with the service key; strict table and column names, an update must have a filter), `audit.js` (the `audit_log` writer, redacts secrets by field name and by value shape), `runtime.js` (the command bus and events), `commands.js`, and `index.js` (`createApp`).
+- [x] **No audit, no action.** The audit entry is written before a command's handler runs, and if it cannot be written the handler does not run. Errors returned to the UI are generic. Unknown commands and malformed or oversized arguments are refused first.
+- [x] If the settings are missing, or the audit log cannot be written (wrong key, tables not applied, database down), the runtime **blocks itself**: it refuses actions with the reason and still answers `runtime.status`, so the window says what to fix instead of failing silently.
+- [x] `window.api` (preload) is exactly `runtime.status`, `decisions.list`, `decisions.resolve`, `agents.pause` and `onEvent`. The renderer cannot reach `ipcRenderer`, `require` or `process`. One request channel (`runtime:invoke`) and one event channel (`runtime:event`); the bridge (`src/ipc.js`) accepts requests only from the app's own page and only well-formed `{ command, args }`. Two invariants enforce the shape of the preload.
+- [x] `decisions.resolve` and `agents.pause` have their final argument rules but refuse with "not built yet" and change nothing. The real approval logic is step 1.6: a half-built approval path is worse than none.
+- [x] The window shows runtime status, database state and how many decisions are waiting, in plain language, with specific messages for missing tables, a rejected key, an unreachable database and missing settings.
+- [x] `scripts/fake-supabase.js`: a local stand-in for Supabase's REST API (a real Postgres with your migrations behind the endpoints the runtime uses). It is how this step was verified without your tables, and it is a dev tool for later steps (`node scripts/fake-supabase.js`, then use the printed settings with `npm run dev`).
+- Verified in the real app (`npm start`) against the stand-in: the renderer's calls get answers, the audit log holds `runtime.started`, every `decisions.list`, `decisions.resolve` and `agents.pause` call (recorded before it ran), and `runtime.stopped` on quit; rejected requests were not recorded because they never became actions. Against your real project today the app reports "tables are missing", blocks itself and writes nothing.
+- **Done when:** the renderer calls `window.api` and gets a response from the runtime, and the call appears in `audit_log`. **Met against the stand-in.** To confirm on your real project: apply the migrations (step 1.1), run `npm start`, then check the `audit_log` table in the Supabase dashboard for `runtime.started` and `command.decisions.list`.
+- Decisions made here that you may want to change: reads from the window (`decisions.list`) are audited like any action, which will flood the log if the queue page polls, so step 1.9 should update the queue from events instead; `.env` is read from the app folder, which works for development but a packaged app will need a settings location in the user's data folder (decide at packaging).
 
 **1.3 Model router** (one and a half days; the Claude Code provider adds about half a day)
 - Provider wrapper over Groq, local Ollama and Claude Code, in that order, with a fallback chain and retry with backoff. Providers are listed in configuration, so adding Gemini or OpenRouter later is a config change, not a code change (the router tests use a mocked provider list to prove it).
@@ -271,7 +286,7 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - **Done when:** a preview deploy runs unattended, and a production deploy waits for approval.
 
 **4.6 Compliance and provider review** (half a day)
-- Check the data-training terms of each provider in use (Groq and Claude Code in v1, plus any added later) and Anthropic's terms for running Claude Code unattended and route sensitive text to local Ollama or not at all. List the items for a CA and a lawyer (company registration, GST for exports, DPDP, GDPR, client contracts stating AI use, FIRC/FIRA).
+- Check the data-training terms of each provider in use (Groq and Claude Code in v1, plus any added later) and Anthropic's terms for running Claude Code unattended and route sensitive text to local Ollama or not at all. List the items for a CA and a lawyer (the company is currently a sole proprietorship, so ask whether to register a company before taking on global clients, because contracts are then the founder's personal liability; GST for exports, DPDP, GDPR, client contracts stating AI use, FIRC/FIRA).
 - **Done when:** a routing rule keeps client secrets off free providers, and the compliance list is handed to the founder.
 
 **4.7 Mock project week** (two days)
@@ -303,14 +318,18 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - [x] Renderer: React via `electron-vite` (decided Nov 21, 2026; implemented in step 0.2)
 - [x] Gemini and OpenRouter: not used in v1, to be added later (decided Nov 21, 2026). v1 uses Groq, with local Ollama as the fallback.
 - [x] Is Ollama installed locally? Yes: running on `localhost:11434` with 11 models (checked Nov 21, 2026), so v1 has a fallback provider.
+- [ ] The GitHub repo `Vansh1419/sfactory` is **public** and holds the business blueprint, plan and charter. Recommended: make it private (`gh repo edit Vansh1419/sfactory --visibility private --accept-visibility-change-consequences`). Content already pushed may already have been copied or cached, so treat it as seen. The first commit's author email is a company address; to use a different one for future commits, set `git config user.email`.
+- [ ] Memory embeddings: the `memory.embedding` column is `vector(768)`, which fits common local embedding models such as `nomic-embed-text`. No embedding model is installed in your Ollama today (the list has chat and vision models only), and Gemini embeddings are deferred. Decide the model before real memory data goes in, because changing the dimension later is a migration.
+- [ ] Pod-scoped database access (step 3.2): the isolation rules assume a JWT with a `pod_id` claim that the runtime mints per pod. Confirm how your Supabase project signs JWTs (its JWT secret, or the newer signing keys) before building 3.2. Until then the runtime's service key is the only database client, and the rules are defence in depth.
 - [x] Third fallback: Claude Code running in the background with Haiku at low effort (decided Nov 21, 2026; step 1.3). Feasibility checked: it works on the existing login with no API key set.
 - [ ] Which tiers may the Claude Code fallback serve? Proposed: the cheap tier always; the strong tier (planning, anything reaching the founder) only as a last resort, and only if the result still passes the card checker.
 - [ ] Is it allowed to run Claude Code unattended from this app on your own login? Check Anthropic's current terms and usage limits before enabling it. It shares your limits with your own sessions. If it is not allowed, the alternative is an API key, which is paid usage and counts as spend.
 - [ ] When the runtime later moves to a server, `claude` must be installed and logged in there too. Decide whether the Claude Code fallback is enabled on the server.
 - [ ] Which Ollama model is the fallback, and which is allowed for sensitive text? Only models that run on this machine count as local: `kimi-k2.7-code:cloud` and `glm-5:cloud` carry the `:cloud` tag, which normally means Ollama forwards the request to a remote service. The router must not treat them as private, so step 1.3 should keep a list of models allowed for sensitive text. Candidates already installed and local: `qwen3.5:27b`, `qwen3.5:latest`, `llama3:latest`, `mistral:latest`, `deepseek-r1:32b`.
 - [x] Tray and start-at-login in v1 (decided Nov 21, 2026: included; built in step 4.4)
-- [ ] Company name and legal entity type?
-- [ ] Which agency service first, and which SaaS idea first?
+- [x] Company name and legal entity type: sfactory (working name), sole proprietorship (decided Nov 21, 2026).
+- [x] Agency services: all four, with one pilot project in each (web development, AI automation, marketing, content). **Schedule consequence:** the web development and AI automation pilots need the Engineering team, which arrives in Phase 3 (week 3), so those two cannot start before then. The marketing and content pilots can run in Phase 2 on the Marketing & Sales team. Running four pilots in the 4-week window is ambitious; if time slips, drop pilots from the end of the list, not the approval and safety work.
+- [ ] First SaaS idea and its customer: not decided. The charter tells agents not to start one until you name it.
 - [ ] Telegram only (assumed) or WhatsApp from day one?
 - [ ] Agent cap in total and per pod, and the scale-up threshold?
 - [ ] Max projects running at once in v1?

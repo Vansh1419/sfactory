@@ -27,10 +27,12 @@ Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 
 | Suite | Grades | Cases | Threshold | Plan step | Today |
 |---|---|---|---|---|---|
-| `invariants` | The repo itself: architecture, security settings, docs in sync | 9 | 100% | 0.4 | pass |
+| `invariants` | The repo itself: architecture, security settings, docs in sync | 10 | 100% | 0.4 | pass |
 | `policy-check` | `src/runtime/policy.js` | 32 | 100% | 1.4 | pending |
 | `decision-cards` | `src/runtime/cards.js` | 15 | 100% | 1.5 | pending |
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pending |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 21 | 100% | 1.1 | pass |
+| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 23 | 100% | 1.2 | pass |
 
 Update the "Today" column when a suite's status changes.
 
@@ -40,7 +42,7 @@ Update the "Today" column when a suite's status changes.
 
 Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check function in the suite file. Runs against the repo today.
 
-**Cases:** 9
+**Cases:** 10
 
 | Case | Rule it protects |
 |---|---|
@@ -48,7 +50,8 @@ Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check fu
 | `window-security-flags` | `src/main.js` keeps `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |
 | `renderer-csp-strict` | `index.html` has a CSP with `default-src 'self'` and no `'unsafe-inline'` or `'unsafe-eval'` |
 | `dev-csp-relaxation-serve-only` | `electron.vite.config.mjs` may loosen the CSP for hot reload only with `apply: 'serve'`, so production builds keep the strict CSP |
-| `preload-no-raw-ipcrenderer` | `src/preload.js` never hands `ipcRenderer` itself to the renderer |
+| `preload-no-raw-ipcrenderer` | `src/preload.js` never hands `ipcRenderer` itself to the renderer (the `require` line that imports it is ignored) |
+| `preload-exposes-only-the-planned-api` | `src/preload.js` exposes only `window.versions` and `window.api`, and uses `ipcRenderer` only through `invoke`, `on` and `removeListener` on the two literal channels `runtime:invoke` and `runtime:event` |
 | `secrets-and-results-gitignored` | `.gitignore` lists `.env` and `.claude/evals/results/` |
 | `claude-docs-in-dot-claude` | No `CLAUDE.md`, `CLAUDE.local.md`, `PLAN.md`, `EVALS.md` or `SKILL.md` exists outside `.claude/` |
 | `env-example-names-only` | `.env.example` exists and every line is a comment or a `NAME=` with no value, so no key is ever committed through it |
@@ -110,6 +113,45 @@ Contract: `buildInvocation({ prompt, env, tmpDir }) -> { command, args, cwd, env
 | `reports-is-error-results` | An `is_error` result is reported as an error, so the router falls through |
 | `garbage-output-is-an-error-not-a-throw` | Non-JSON output becomes an error result and never crashes the router |
 
+### database-schema
+
+Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
+
+**Cases:** 21
+
+How it works: the migrations are applied, in filename order, to a real Postgres running inside the test (PGlite, which is PostgreSQL 18, with pgvector). It is dressed like Supabase: the `anon`, `authenticated` and `service_role` roles, an `auth.jwt()` that reads the request's claims, and Supabase's default grants (which the migrations must take back). A fixture creates two pods with rows in every table. Each case then acts as someone specific (a pod agent with a `pod_id` claim, no claim, `anon`, the runtime's `service_role`, or the table owner) and tries things, always inside a transaction that is rolled back. Attack cases include a positive control (the same action on the pod's own data must succeed) so a case cannot pass just because everything is blocked. The contract (tables and columns the fixture inserts into) is in the header of the suite file.
+
+Limits: this proves the policies and rules, not that they apply to your real project. It uses a stub of Supabase's `auth.jwt()`, and PostgreSQL 18 where Supabase currently runs an older version. Applying the migrations to the real project is checked separately (`npm run check:db`).
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Schema | 5 | Migrations apply to an empty database; all 11 core tables exist; row-level security is on for every public table (a future table without it fails this); `anon` has no privileges on any table; `memory.embedding` is a 768-dimension `pgvector` column and nearest-neighbour search works |
+| Reading | 5 | A pod reads only its own rows in six tables; sees only its own pod and project; sees only its own project's client; sees only its own members plus shared specialists; a request with no pod claim sees nothing anywhere |
+| Writing | 4 | A pod cannot write into, or move rows to, another pod; cannot approve its own request, including a fully forged approval; cannot read scaling rules or touch the audit log; cannot delete its rows |
+| Runtime | 1 | The runtime's `service_role` sees everything |
+| Integrity | 5 | The audit log is append-only even for the table owner (update, delete, truncate); a resolved decision is frozen; a decision's content (card, action, category, pod, amounts) cannot change after filing; approved or rejected needs a resolver and a time; a card needs all seven fields |
+| Seed | 1 | The seed creates exactly one fake pod and one fake agent, all labelled `[seed]`, and can run twice without duplicating |
+
+Checked by mutation on Nov 21, 2026: 8 realistic mistakes were each introduced into the migrations one at a time (a policy that lets everything through, a missing append-only trigger, pods allowed to update decisions, row-level security off on one table, `anon` grants not revoked, the decision-freeze trigger removed, pre-approved requests allowed, the card-field check removed). All 8 were caught. The first run missed "pods allowed to update decisions" because the attack was too weak; the attack was strengthened.
+
+### runtime-core
+
+Suite: `.claude/evals/suites/runtime-core.js`. No dataset; each case is a check function with an in-memory fake store that records every call. Code under test: `src/runtime/config.js`, `audit.js`, `runtime.js`, `commands.js` and `src/ipc-guard.js`.
+
+**Cases:** 23
+
+Contract: the full contract (function signatures, error codes, the store interface) is in the header of the suite file. Nothing here touches Electron, the network or a real database, so it runs in milliseconds. The Electron wiring (`src/main.js`, `src/ipc.js`, `src/preload.js`) is covered by the `invariants` checks, and by launching the real app (see PLAN.md step 1.2).
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Config | 4 | Both Supabase settings are required and problems name the setting, never the value; a URL that is not `*.supabase.co` or local is rejected, so the key can't be sent elsewhere; the printable description hides the key |
+| Audit | 3 | Secrets in an entry (by field name, and by value shape: Groq, Anthropic, Supabase, JWT, Telegram) are redacted before writing; an invalid entry is refused and writes nothing; a valid entry becomes one `audit_log` row with the right columns |
+| Command bus | 10 | Unknown commands are refused and not logged; malformed or oversized arguments are refused before anything runs; **the audit entry is written before the handler runs; if it cannot be written the handler never runs**; a crashing handler returns a generic message (no internals, no secrets) and the failure is audited; `CommandError` passes its code through; never-audited commands (status) skip the log and work without a database; events reach subscribers, with a wildcard, and a bad listener breaks nothing; a stopped runtime refuses everything; a blocked runtime refuses actions but still answers status |
+| Commands | 4 | Exactly the four planned commands exist; `decisions.list` defaults to pending, caps the size and rejects bad options; `decisions.resolve` and `agents.pause` validate their final arguments but refuse with `not_implemented` and change nothing; status reports the database state without leaking the error |
+| IPC guard | 2 | Only the app's own page (the built `index.html`, or the dev server's exact origin in dev only) is trusted; payloads must be a plain command name with plain-object arguments |
+
+Checked by mutation on Nov 21, 2026: 8 realistic mistakes were introduced into the runtime one at a time (audit failure no longer blocking, internal errors leaking, redaction off, any file URL trusted, argument checks removed, status audited, a stopped runtime still accepting commands, the dev server trusted in production). All 8 were caught.
+
 ## Planned evals (not built yet)
 
 Each is added before the code it grades, in the step shown. Move it into the registry above when written.
@@ -121,7 +163,7 @@ Each is added before the code it grades, in the step shown. Move it into the reg
 | `orchestrator-approval` | A goal containing a spend pauses the graph and resumes when approved | 1.7 | deterministic |
 | `mcp-tagging` | Every tool is tagged read or write; write tools that spend, send, deploy or sign go through the policy check | 1.10 | deterministic |
 | `outbound-review` | An outbound client message can't be sent without review, and the first-2-weeks setting forces a decision | 2.2 | deterministic |
-| `pod-isolation` | An agent in pod A can't read pod B's files, repo, memory or client data | 3.2 | deterministic |
+| `pod-isolation` | An agent in pod A can't read pod B's files, repo, memory or client data. The database part is already covered by `database-schema`; this adds the file, repo and tool scoping | 3.2 | deterministic |
 | `guardrails` | Max steps and tokens stop a looping agent; the kill switch stops an agent mid-task | 4.2 | deterministic |
 | `scaling` | Agents are added up to the cap, a decision card appears past it, and idle agents are removed | 4.1 | deterministic |
 
