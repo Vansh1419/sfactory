@@ -1,0 +1,26 @@
+{
+  "name": "sfactory",
+  "version": "0.1.0",
+  "description": "sfactory Electron app",
+  "main": "out/main/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "node --test \".claude/**/*.test.js\" \"src/**/*.test.js\"",
+    "eval": "node .claude/evals/run.js",
+    "eval:strict": "node .claude/evals/run.js --strict"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.4.1",
+    "electron-vite": "^6.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
+  }
+}

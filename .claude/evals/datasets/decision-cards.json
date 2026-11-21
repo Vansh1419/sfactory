@@ -1,0 +1,198 @@
+[
+  {
+    "id": "good-kickstart-example",
+    "card": {
+      "decide": "The new login page for Client A is ready. Can we make it live for their customers?",
+      "why_now": "Client A asked for it to be ready this week.",
+      "if_yes": "It goes live tonight.",
+      "if_no": "It waits until you decide.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "We can switch back to the old page if anything goes wrong." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "good-technical-word-explained-in-brackets",
+    "card": {
+      "decide": "Can we connect our CRM to the email tool through an API (a link that lets two apps talk to each other)?",
+      "why_now": "Follow-up emails are being sent by hand today.",
+      "if_yes": "Follow-ups go out on their own after each call.",
+      "if_no": "Follow-ups stay manual.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "We can turn the link off at any time." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "good-time-with-ist",
+    "card": {
+      "decide": "Can we send the welcome email to 12 new clients?",
+      "why_now": "They signed up this week.",
+      "if_yes": "The emails go out at 9:00 AM IST tomorrow.",
+      "if_no": "No email is sent.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "It is a standard welcome message you have already seen." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "good-details-may-be-technical",
+    "card": {
+      "decide": "Can we make the new login page live for Client A?",
+      "why_now": "The client asked for it this week.",
+      "if_yes": "It goes live tonight.",
+      "if_no": "It waits.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "We can switch back to the old page." },
+      "recommendation": "Yes.",
+      "details": "Deploy v1.3 to prod; DB migration on users table; rollback via snapshot. `npm run migrate`"
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+
+  {
+    "id": "bad-technical-before-example",
+    "card": {
+      "decide": "Approve deploy of v1.3 to prod; DB migration on users table, rollback via snapshot.",
+      "why_now": "Sprint ends today.",
+      "if_yes": "Deploy proceeds.",
+      "if_no": "Deploy is blocked.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "Rollback is available." },
+      "recommendation": "Approve."
+    },
+    "expect": { "pass": false, "problems": ["jargon"] }
+  },
+  {
+    "id": "bad-abbreviation-not-explained",
+    "card": {
+      "decide": "Can we rotate the API key for the email tool?",
+      "why_now": "The old one is a year old.",
+      "if_yes": "A new key replaces the old one.",
+      "if_no": "The old one stays.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "Emails pause for a minute at most." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["jargon"] }
+  },
+  {
+    "id": "bad-missing-risk",
+    "card": {
+      "decide": "Can we send the proposal to Client B?",
+      "why_now": "They asked for it today.",
+      "if_yes": "The proposal is sent.",
+      "if_no": "It is held back.",
+      "cost": "₹0 ($0)",
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["missing_field"] }
+  },
+  {
+    "id": "bad-blank-recommendation",
+    "card": {
+      "decide": "Can we send the proposal to Client B?",
+      "why_now": "They asked for it today.",
+      "if_yes": "The proposal is sent.",
+      "if_no": "It is held back.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "It is a standard proposal." },
+      "recommendation": "  "
+    },
+    "expect": { "pass": false, "problems": ["missing_field"] }
+  },
+  {
+    "id": "bad-risk-without-reason",
+    "card": {
+      "decide": "Can we send the proposal to Client B?",
+      "why_now": "They asked for it today.",
+      "if_yes": "The proposal is sent.",
+      "if_no": "It is held back.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "" },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["missing_field"] }
+  },
+  {
+    "id": "bad-code-in-founder-text",
+    "card": {
+      "decide": "Can we update the site footer?",
+      "why_now": "The address changed.",
+      "if_yes": "We run `npm run build` and the footer is updated.",
+      "if_no": "The old address stays.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "It is a small text change." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["contains_code"] }
+  },
+  {
+    "id": "bad-cost-rupees-only",
+    "card": {
+      "decide": "Can we pay for a 1-year domain?",
+      "why_now": "The name is available now.",
+      "if_yes": "We buy the domain.",
+      "if_no": "Someone else may take it.",
+      "cost": "₹1,200",
+      "risk": { "level": "Low", "reason": "It is a small, one-time cost." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
+    "id": "bad-cost-dollars-only",
+    "card": {
+      "decide": "Can we pay for a 1-year domain?",
+      "why_now": "The name is available now.",
+      "if_yes": "We buy the domain.",
+      "if_no": "Someone else may take it.",
+      "cost": "$15",
+      "risk": { "level": "Low", "reason": "It is a small, one-time cost." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
+    "id": "bad-risk-level-not-allowed",
+    "card": {
+      "decide": "Can we email the full client list?",
+      "why_now": "A new offer starts today.",
+      "if_yes": "Everyone gets the email.",
+      "if_no": "No email goes out.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Severe", "reason": "A wrong message reaches everyone." },
+      "recommendation": "Not yet."
+    },
+    "expect": { "pass": false, "problems": ["bad_risk_level"] }
+  },
+  {
+    "id": "bad-time-without-timezone",
+    "card": {
+      "decide": "Can we send the welcome email to 12 new clients?",
+      "why_now": "They signed up this week.",
+      "if_yes": "The emails go out at 21:00 tomorrow.",
+      "if_no": "No email is sent.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "It is a standard welcome message." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["time_format"] }
+  },
+  {
+    "id": "bad-time-in-utc",
+    "card": {
+      "decide": "Can we send the welcome email to 12 new clients?",
+      "why_now": "They signed up this week.",
+      "if_yes": "The emails go out at 9:00 PM UTC tomorrow.",
+      "if_no": "No email is sent.",
+      "cost": "₹0 ($0)",
+      "risk": { "level": "Low", "reason": "It is a standard welcome message." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["time_format"] }
+  }
+]
