@@ -137,9 +137,83 @@ const checks = [
         .filter((l) => l !== '' && !l.startsWith('#'))
         .filter((l) => !/^[A-Z][A-Z0-9_]*=$/.test(l))
         .map((l) => l.split('=')[0]);
-      return bad.length === 0
+      if (bad.length > 0) return { pass: false, detail: `.env.example has values or odd lines for: ${bad.join(', ')}` };
+
+      // And it must name every setting the code reads, or a missing line goes unnoticed until someone
+      // follows the instructions in an error message and finds nothing to copy.
+      const listed = new Set(
+        read('.env.example').split('\n').map((l) => l.trim()).filter((l) => /^[A-Z][A-Z0-9_]*=$/.test(l)).map((l) => l.slice(0, -1)),
+      );
+      const setByTools = new Set(['ELECTRON_RENDERER_URL']); // set by electron-vite, not by the founder
+      const readNames = new Set();
+      for (const file of [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]) {
+        if (!/\.(c|m)?jsx?$/.test(file) || /\.test\.(c|m)?js$/.test(file)) continue;
+        const code = fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+        for (const m of code.matchAll(/\benv\.([A-Z][A-Z0-9_]+)\b|\benv\[['"]([A-Z][A-Z0-9_]+)['"]\]/g)) readNames.add(m[1] ?? m[2]);
+      }
+      const unlisted = [...readNames].filter((n) => !listed.has(n) && !setByTools.has(n)).sort();
+      return unlisted.length === 0
         ? { pass: true }
-        : { pass: false, detail: `.env.example has values or odd lines for: ${bad.join(', ')}` };
+        : { pass: false, detail: `the code reads ${unlisted.join(', ')} but .env.example does not list ${unlisted.length === 1 ? 'it' : 'them'}` };
+    },
+  },
+  {
+    id: 'policy-is-the-only-source-of-allow',
+    // PLAN.md step 1.4: no code path may mark an action allowed except the policy
+    // check. If another file builds an `allowed: true` answer, it can skip the rules.
+    check() {
+      const policy = path.join('src', 'runtime', 'policy.js');
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const grants = /\ballowed\s*[:=]\s*true\b/;
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => rel !== policy)
+        .filter((rel) => grants.test(stripComments(read(rel))));
+      if (offenders.length > 0) return { pass: false, detail: `builds an "allowed: true" answer outside ${policy}: ${offenders.join(', ')}` };
+      if (!fs.existsSync(path.join(ROOT, policy))) return { pass: true };
+      const own = stripComments(read(policy)).match(new RegExp(grants.source, 'g')) ?? [];
+      return own.length === 1 ? { pass: true } : { pass: false, detail: `${policy} should grant in exactly one place, found ${own.length}` };
+    },
+  },
+  {
+    id: 'only-the-decisions-service-answers-decisions',
+    // PLAN.md step 1.6: "nothing is ever auto-approved". Only src/runtime/decisions.js may write a
+    // decision's status or its resolution fields, and its answer channels are exactly the founder's two.
+    check() {
+      const service = path.join('src', 'runtime', 'decisions.js');
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const writes = /\b(?:resolved_via|resolved_at|resolution_note)\b|\bstatus\s*[:=]\s*['"](?:approved|rejected|cancelled|info_requested)['"]/;
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => rel !== service)
+        .filter((rel) => writes.test(stripComments(read(rel))));
+      if (offenders.length > 0) return { pass: false, detail: `writes a decision status or resolution outside ${service}: ${offenders.join(', ')}` };
+      if (!fs.existsSync(path.join(ROOT, service))) return { pass: true };
+      const channels = stripComments(read(service)).match(/const CHANNELS = \[([^\]]*)\]/);
+      const names = channels ? channels[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean).sort() : null;
+      return JSON.stringify(names) === JSON.stringify(['dashboard', 'telegram'])
+        ? { pass: true }
+        : { pass: false, detail: `${service} must answer only for "dashboard" and "telegram", found ${JSON.stringify(names)}` };
+    },
+  },
+  {
+    id: 'only-the-policy-tools-service-touches-the-policy-table',
+    // The founder can add tools to the policy check from Telegram (src/runtime/policy-tools.js). That is the
+    // only code that may read or write the policy_tools table, so no other module (and nothing an agent
+    // is handed) has a way to loosen the policy; the service itself is for the bot and the dashboard only.
+    check() {
+      const service = path.join('src', 'runtime', 'policy-tools.js');
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => rel !== service)
+        .filter((rel) => /policy_tools/.test(stripComments(read(rel))));
+      return offenders.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `uses the policy_tools table outside ${service}: ${offenders.join(', ')}` };
     },
   },
   {

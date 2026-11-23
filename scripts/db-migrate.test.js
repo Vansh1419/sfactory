@@ -40,7 +40,9 @@ test('projectRefFromUrl accepts a project URL and nothing else', () => {
 
 test('listMigrations reads the real migrations in order and rejects badly named files', () => {
   const files = m.listMigrations();
-  assert.deepEqual(files.map((f) => f.name), ['core_schema', 'row_level_security', 'integrity_rules']);
+  // The ones already applied to the founder's project, in order, then anything added since.
+  assert.deepEqual(files.map((f) => f.name).slice(0, 4), ['core_schema', 'row_level_security', 'integrity_rules', 'policy_tools']);
+  assert.deepEqual(files.map((f) => f.version), [...files.map((f) => f.version)].sort(), 'versions are in order');
   assert.ok(files.every((f) => /^\d{14}$/.test(f.version) && f.sql.length > 100));
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
@@ -55,24 +57,50 @@ test('applies every migration to a fresh project, records them, and a second run
   const migrations = m.listMigrations();
 
   const first = await m.applyMigrations({ client, migrations });
-  assert.equal(first.applied.length, 3);
-  assert.equal((await tableNames(db)).length, 11);
+  assert.equal(first.applied.length, migrations.length);
+  // Pinned on purpose: a new table is a deliberate change, so adding one means updating this list.
+  assert.deepEqual(await tableNames(db), [
+    'agent_events', 'agents', 'audit_log', 'clients', 'decisions', 'memory', 'pod_members', 'pods', 'policy_tools', 'projects', 'scaling_rules', 'tasks',
+  ]);
   assert.deepEqual(await recorded(db), migrations.map((x) => x.version));
 
   const second = await m.applyMigrations({ client, migrations });
   assert.deepEqual(second.applied, []);
-  assert.equal((await recorded(db)).length, 3);
+  assert.equal((await recorded(db)).length, migrations.length);
 });
 
 test('a dry run reports what is pending and changes nothing', async () => {
   const db = await createEmptyDatabase();
   const lines = [];
-  const r = await m.applyMigrations({ client: clientFor(db), migrations: m.listMigrations(), dryRun: true, log: (l) => lines.push(l) });
-  assert.equal(r.pending.length, 3);
+  const migrations = m.listMigrations();
+  const r = await m.applyMigrations({ client: clientFor(db), migrations, dryRun: true, log: (l) => lines.push(l) });
+  assert.equal(r.pending.length, migrations.length);
   assert.deepEqual(await tableNames(db), []);
   const tracking = await db.query("select to_regclass('supabase_migrations.schema_migrations') as t");
   assert.equal(tracking.rows[0].t, null);
   assert.ok(lines.some((l) => l.startsWith('Would apply')));
+});
+
+test('a new migration applies on top of the ones already applied, and only that one runs', async () => {
+  // This is the founder's real situation: three migrations are on the project, a fourth arrives.
+  const db = await createEmptyDatabase();
+  const client = clientFor(db);
+  const all = m.listMigrations();
+  const alreadyApplied = all.slice(0, 3);
+  const latest = all.slice(3);
+  assert.ok(latest.length >= 1, 'there is at least one migration after the first three');
+
+  await m.applyMigrations({ client, migrations: alreadyApplied });
+  assert.equal((await tableNames(db)).includes('policy_tools'), false);
+  const lines = [];
+  const out = await m.applyMigrations({ client, migrations: all, log: (l) => lines.push(l) });
+
+  assert.deepEqual(out.applied, latest.map((x) => x.file));
+  assert.ok(lines.some((l) => /3 migration\(s\) already applied/.test(l)), 'it saw the three that were already there');
+  assert.equal((await tableNames(db)).includes('policy_tools'), true);
+  assert.deepEqual(await recorded(db), all.map((x) => x.version));
+  const rls = await db.query("select relrowsecurity from pg_class where relname = 'policy_tools'");
+  assert.equal(rls.rows[0].relrowsecurity, true, 'the new table is locked down');
 });
 
 test('refuses to run over a project that already has tables, and changes nothing', async () => {

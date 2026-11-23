@@ -41,6 +41,7 @@ const IDS = {
   taskA: uuid(51), taskB: uuid(52), taskCompany: uuid(53),
   decPendingA: uuid(61), decPendingB: uuid(62), decApprovedA: uuid(63),
   memA: uuid(71), memB: uuid(72), memCompany: uuid(73),
+  policyToolActive: uuid(81), policyToolProposed: uuid(82),
 };
 
 /** A unit vector with a 1 at position i, as pgvector text. */
@@ -93,6 +94,10 @@ insert into agent_events (pod_id, agent_id, kind, summary) values
 insert into audit_log (actor_type, pod_id, action) values
   ('system', '${IDS.podA}', 'fixture'), ('system', '${IDS.podB}', 'fixture'), ('system', null, 'fixture');
 insert into scaling_rules (scope, max_agents) values ('global', 10);
+insert into policy_tools (id, tool, kind, category, status, proposed_via, confirmed_via, activated_at) values
+  ('${IDS.policyToolActive}', 'fixture.refund_customer', 'ask', 'spend', 'active', 'telegram', 'telegram', now());
+insert into policy_tools (id, tool, kind, access, status, proposed_via) values
+  ('${IDS.policyToolProposed}', 'fixture.read_report', 'routine', 'read', 'proposed', 'telegram');
 `;
 
 function migrationFiles() {

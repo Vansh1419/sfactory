@@ -1,11 +1,12 @@
 'use strict';
 
 // The four commands of the `window.api` surface (PLAN.md step 1.2).
-// decisions.resolve and agents.pause have their final argument rules but refuse
-// to act until their plan steps exist: approval logic is step 1.6, and a
-// half-built approval path is worse than none.
+// decisions.resolve hands the founder's answer to the decisions service (step 1.6),
+// always as "dashboard": the window cannot claim to be Telegram. agents.pause has its
+// final argument rules but refuses to act until its plan step exists.
 
 const { CommandError } = require('./runtime');
+const { DecisionError } = require('./decisions');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 'cancelled'];
@@ -30,7 +31,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0' }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -61,6 +62,8 @@ function registerCommands(runtime, { store, version = '0.1.0' }) {
   });
 
   runtime.register('decisions.resolve', {
+    // The founder's note is free text: the audit entry records that there was one, not what it said.
+    auditArgs: (args) => ({ id: args.id, decision: args.decision, hasNote: args.note !== undefined }),
     validate(args) {
       const extra = unknownKey(args, ['id', 'decision', 'note']);
       if (extra) return extra;
@@ -69,8 +72,20 @@ function registerCommands(runtime, { store, version = '0.1.0' }) {
       if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) return 'note must be text of at most 2000 characters';
       return null;
     },
-    handler: async () => {
-      throw new CommandError('not_implemented', 'Resolving decisions is built in plan step 1.6. Nothing was changed.');
+    handler: async (args) => {
+      if (!decisions) throw new CommandError('not_available', 'Answering decisions is not available right now. Nothing was changed.');
+      try {
+        return await decisions.resolve({
+          id: args.id,
+          decision: args.decision,
+          via: 'dashboard',
+          ...(args.note !== undefined ? { note: args.note } : {}),
+        });
+      } catch (err) {
+        // The service's own errors are written for the founder; anything else stays generic.
+        if (err instanceof DecisionError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
     },
   });
 

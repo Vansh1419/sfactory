@@ -12,15 +12,22 @@
 //                            writes one audit_log row (snake_case columns), redacts secrets in `detail`,
 //                            rejects invalid entries (throws, writes nothing). redactDetail(detail) is exported.
 //   src/runtime/runtime.js   createRuntime({ audit }) -> { register, invoke, commands, on, emit, stop, block }
-//                            register(name, { handler, validate?, audit?: 'always'|'never', allowWhenBlocked? })
+//                            register(name, { handler, validate?, audit?: 'always'|'never', allowWhenBlocked?, auditArgs? })
+//                            auditArgs(args) -> the object recorded as the entry's `args` instead of all of them (for free text
+//                            that should not sit in the log); the handler still receives every argument; if it throws,
+//                            an empty object is recorded
 //                            invoke(name, args, { actor? }) never throws and returns
 //                              { ok: true, data } | { ok: false, error: { code, message } }
 //                            CommandError(code, message) is exported; its code and message reach the caller as-is,
 //                            any other thrown error becomes { code: 'internal_error', message: <generic> }
 //                            error codes: unknown_command, invalid_args, audit_unavailable, internal_error,
 //                              runtime_stopped, runtime_not_configured
-//   src/runtime/commands.js  registerCommands(runtime, { store }) registers exactly:
+//   src/runtime/commands.js  registerCommands(runtime, { store, decisions? }) registers exactly:
 //                            runtime.status, decisions.list, decisions.resolve, agents.pause
+//                            decisions.resolve calls decisions.resolve({ id, decision, via: 'dashboard', note? })
+//                            on the decisions service (src/runtime/decisions.js, step 1.6); a DecisionError
+//                            keeps its code and message, anything else is generic; with no service the
+//                            command answers "not_available". The caller cannot choose `via`.
 //   src/ipc-guard.js         isTrustedSender(url, { rendererFileUrl, rendererDevUrl? }) -> boolean
 //                            parseInvoke(payload) -> { command, args } | null
 //
@@ -35,6 +42,8 @@ const COMMANDS = 'src/runtime/commands.js';
 const GUARD = 'src/ipc-guard.js';
 
 const UUID = '00000000-0000-4000-8000-000000000001';
+const NOT_FOUND = '00000000-0000-4000-8000-000000000002';
+const BROKEN = '00000000-0000-4000-8000-000000000003';
 const KEY = 'sb_secret_' + 'k'.repeat(30);
 
 const verdict = (pass, detail) => (pass ? { pass: true } : { pass: false, detail });
@@ -70,9 +79,9 @@ function setup(storeOptions) {
   return { store, runtime, CommandError };
 }
 
-function setupWithCommands(storeOptions) {
+function setupWithCommands(storeOptions, extra = {}) {
   const s = setup(storeOptions);
-  loadSubject(COMMANDS).registerCommands(s.runtime, { store: s.store });
+  loadSubject(COMMANDS).registerCommands(s.runtime, { store: s.store, ...extra });
   return s;
 }
 
@@ -304,15 +313,93 @@ const cases = [
     },
   },
   {
-    id: 'resolve-and-pause-refuse-until-they-are-built-and-change-nothing',
+    id: 'resolve-goes-to-the-decisions-service-as-the-dashboard',
+    // PLAN.md step 1.6: the dashboard's answer is the service's job. The command only
+    // validates, fixes the channel to "dashboard" (the caller cannot pick one), passes the
+    // service's answer through, and lets the service's plain errors reach the window.
+    async check() {
+      const { DecisionError } = loadSubject('src/runtime/decisions.js');
+      const calls = [];
+      const decisions = {
+        async resolve(args) {
+          calls.push(args);
+          if (args.id === NOT_FOUND) throw new DecisionError('not_found', 'That decision was not found.');
+          if (args.id === BROKEN) throw new Error('connect failed for SECRETVALUE3');
+          return { id: args.id, status: args.decision, changed: true, conflict: false, resolvedVia: args.via };
+        },
+      };
+      const { runtime, store } = setupWithCommands({}, { decisions });
+      const ok = await runtime.invoke('decisions.resolve', { id: UUID, decision: 'approved', note: 'go' });
+      const sneaky = await runtime.invoke('decisions.resolve', { id: UUID, decision: 'approved', via: 'telegram' });
+      const missing = await runtime.invoke('decisions.resolve', { id: NOT_FOUND, decision: 'approved' });
+      const broken = await runtime.invoke('decisions.resolve', { id: BROKEN, decision: 'approved' });
+      const bad = await runtime.invoke('decisions.resolve', { id: 'not-a-uuid', decision: 'approved' });
+      const none = setupWithCommands();
+      const noService = await none.runtime.invoke('decisions.resolve', { id: UUID, decision: 'approved' });
+      const writes = store.log.filter((e) => e[0] === 'update' || (e[0] === 'insert' && e[1] !== 'audit_log'));
+      const good = ok.ok && ok.data.status === 'approved' && json(calls[0]) === json({ id: UUID, decision: 'approved', via: 'dashboard', note: 'go' });
+      const refused = sneaky.error?.code === 'invalid_args' && bad.error?.code === 'invalid_args' && calls.length === 3;
+      const errors = missing.error?.code === 'not_found' && missing.error.message === 'That decision was not found.'
+        && broken.error?.code === 'internal_error' && !json(broken).includes('SECRETVALUE3') && noService.error?.code === 'not_available';
+      return verdict(good && refused && errors && writes.length === 0, `ok ${json(ok)}, calls ${json(calls)}, sneaky ${sneaky.error?.code}, missing ${json(missing)}, broken ${json(broken)}, bad ${bad.error?.code}, noService ${noService.error?.code}, command wrote ${json(writes)}`);
+    },
+  },
+  {
+    id: 'a-command-can-choose-which-arguments-the-audit-log-keeps',
+    // Free text a founder types (a note) does not belong in the audit log. A command can say which of its
+    // arguments are recorded; the handler still gets all of them. A broken chooser records nothing rather
+    // than everything.
+    async check() {
+      const { store, runtime } = setup();
+      const seen = [];
+      runtime.register('keep.some', { auditArgs: (a) => ({ id: a.id, hasNote: a.note !== undefined }), handler: async (a) => { seen.push(a); return {}; } });
+      runtime.register('keep.broken', { auditArgs: () => { throw new Error('boom'); }, handler: async (a) => { seen.push(a); return {}; } });
+      runtime.register('keep.all', { handler: async () => ({}) });
+      const a = await runtime.invoke('keep.some', { id: 'x', note: 'private text' });
+      const b = await runtime.invoke('keep.broken', { id: 'y', note: 'private text two' });
+      const c = await runtime.invoke('keep.all', { id: 'z' });
+      const rows = inserts(store).map((e) => e[2]);
+      const some = rows.find((r) => r.action === 'command.keep.some');
+      const broken = rows.find((r) => r.action === 'command.keep.broken');
+      const all = rows.find((r) => r.action === 'command.keep.all');
+      // A chooser that is not a function is a programming mistake: refuse it when the command is registered.
+      let refused = false;
+      try {
+        runtime.register('keep.typo', { auditArgs: 'id', handler: async () => ({}) });
+      } catch {
+        refused = true;
+      }
+      const ok = refused && a.ok && b.ok && c.ok && json(some?.detail) === json({ args: { id: 'x', hasNote: true } })
+        && json(broken?.detail) === json({ args: {} }) && json(all?.detail) === json({ args: { id: 'z' } })
+        && json(seen) === json([{ id: 'x', note: 'private text' }, { id: 'y', note: 'private text two' }])
+        && !json(rows).includes('private text');
+      return verdict(ok, `some ${json(some?.detail)}, broken ${json(broken?.detail)}, all ${json(all?.detail)}, handlers saw ${json(seen)}`);
+    },
+  },
+  {
+    id: 'the-dashboard-answer-keeps-the-note-out-of-the-command-audit-entry',
+    async check() {
+      const seen = [];
+      const decisions = { async resolve(args) { seen.push(args); return { id: args.id, status: 'approved', changed: true, conflict: false }; } };
+      const { store, runtime } = setupWithCommands({}, { decisions });
+      const r = await runtime.invoke('decisions.resolve', { id: UUID, decision: 'approved', note: 'private reason' });
+      const withoutNote = await runtime.invoke('decisions.resolve', { id: UUID, decision: 'rejected' });
+      const rows = inserts(store).map((e) => e[2]).filter((e) => e.action === 'command.decisions.resolve');
+      const ok = r.ok && withoutNote.ok && seen[0]?.note === 'private reason' && rows.length === 2
+        && json(rows[0].detail) === json({ args: { id: UUID, decision: 'approved', hasNote: true } })
+        && json(rows[1].detail) === json({ args: { id: UUID, decision: 'rejected', hasNote: false } })
+        && !json(rows).includes('private reason');
+      return verdict(ok, `entries ${json(rows)}, service saw ${json(seen)}`);
+    },
+  },
+  {
+    id: 'pause-refuses-until-it-is-built-and-changes-nothing',
     async check() {
       const { store, runtime } = setupWithCommands();
-      const resolve = await runtime.invoke('decisions.resolve', { id: UUID, decision: 'approved' });
       const pause = await runtime.invoke('agents.pause', { agentId: UUID, paused: true });
-      const badResolve = await runtime.invoke('decisions.resolve', { id: 'not-a-uuid', decision: 'approved' });
+      const bad = await runtime.invoke('agents.pause', { agentId: 'nope', paused: true });
       const writes = store.log.filter((e) => e[0] === 'update' || (e[0] === 'insert' && e[1] !== 'audit_log'));
-      const ok = resolve.error?.code === 'not_implemented' && pause.error?.code === 'not_implemented' && badResolve.error?.code === 'invalid_args' && writes.length === 0;
-      return verdict(ok, `resolve ${resolve.error?.code}, pause ${pause.error?.code}, badResolve ${badResolve.error?.code}, writes ${json(writes)}`);
+      return verdict(pause.error?.code === 'not_implemented' && bad.error?.code === 'invalid_args' && writes.length === 0, `pause ${pause.error?.code}, bad ${bad.error?.code}, writes ${json(writes)}`);
     },
   },
   {

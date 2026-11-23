@@ -12,6 +12,10 @@
 //   memory(id, pod_id, kind, content, embedding vector(768))
 //   agent_events(pod_id, agent_id, kind, summary)
 //   audit_log(actor_type, pod_id, action)     scaling_rules(scope, max_agents)
+//   policy_tools(id, tool, kind, category, access, status, proposed_via, confirmed_via, activated_at, removed_at)
+//     the tools the founder added to the policy check from Telegram (step 1.6 follow-up): kind 'ask'
+//     (always needs the founder, with a category) or 'routine' (allowed without asking, with a read or
+//     write tag); status proposed, active or removed; service-role only, never visible to a pod
 //   pod_id is NULL for company-level rows. Pod agents authenticate as role `authenticated`
 //   with a `pod_id` JWT claim; the runtime uses `service_role`, which bypasses RLS.
 
@@ -19,7 +23,7 @@ const { IDS, EMBEDDING_DIMENSIONS, vec, build, applySeed, getEnv, who, withRole,
 
 const TABLES = [
   'tasks', 'agents', 'decisions', 'audit_log', 'memory', 'clients', 'projects',
-  'agent_events', 'pods', 'pod_members', 'scaling_rules',
+  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools',
 ];
 const POD_ROWS = ['tasks', 'decisions', 'memory', 'agent_events', 'audit_log', 'pod_members'];
 
@@ -39,7 +43,7 @@ const cases = [
     },
   },
   {
-    id: 'all-eleven-core-tables-exist',
+    id: 'all-twelve-core-tables-exist',
     async check(db) {
       const r = await db.query("select table_name from information_schema.tables where table_schema = 'public'");
       const have = ids(r.rows, 'table_name');
@@ -283,6 +287,78 @@ const cases = [
         if ((await attempt(tx, decisionSql(), [IDS.podA, ACTION, noRisk, 'pending'])).ok) problems.push('accepted a card without risk');
         const ok = await attempt(tx, decisionSql(), [IDS.podA, ACTION, CARD, 'pending']);
         if (!ok.ok) problems.push(`control failed: ${ok.error}`);
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-pod-cannot-read-or-write-the-policy-table',
+    async check(db) {
+      const problems = [];
+      const control = await withRole(db, who.service, (tx) => tx.query('select count(*)::int as n from policy_tools'));
+      if (control.rows[0].n !== 2) problems.push(`control failed: the runtime sees ${control.rows[0].n} policy rows, expected 2`);
+      for (const [name, actor] of [['pod', who.pod(IDS.podA)], ['no pod claim', who.noPod], ['anon', who.anon]]) {
+        await withRole(db, actor, async (tx) => {
+          const read = await attempt(tx, 'select * from policy_tools');
+          if (read.ok && read.rows.length > 0) problems.push(`${name} reads the policy table`);
+          const add = await attempt(tx, "insert into policy_tools (tool, kind, access, proposed_via) values ('evil.pay', 'routine', 'write', 'telegram')");
+          if (add.ok) problems.push(`${name} added a routine tool`);
+          const edit = await attempt(tx, "update policy_tools set status = 'active', confirmed_via = 'telegram', activated_at = now()");
+          if (edit.ok && edit.count > 0) problems.push(`${name} activated a rule`);
+        });
+      }
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-policy-rule-cannot-be-rewritten-or-deleted-and-removal-is-final',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const control = await attempt(tx, "update policy_tools set status = 'active', confirmed_via = 'dashboard', activated_at = now() where id = $1", [IDS.policyToolProposed]);
+        if (!control.ok || control.count !== 1) problems.push(`control failed: a proposed rule cannot be activated (${control.error})`);
+        // The active "ask" rule: every field that defines the rule is fixed once it exists.
+        const edits = [
+          ['tool', "update policy_tools set tool = 'other.tool' where id = $1"],
+          ['kind', "update policy_tools set kind = 'routine', category = null, access = 'write' where id = $1"],
+          ['category', "update policy_tools set category = 'legal_or_public' where id = $1"],
+        ];
+        for (const [col, sql] of edits) {
+          if ((await attempt(tx, sql, [IDS.policyToolActive])).ok) problems.push(`${col} was editable`);
+        }
+        // The routine rule (activated above): its read tag cannot be widened to write afterwards.
+        if ((await attempt(tx, "update policy_tools set access = 'write' where id = $1", [IDS.policyToolProposed])).ok) problems.push('the access tag of a routine rule was editable');
+        if ((await attempt(tx, 'delete from policy_tools where id = $1', [IDS.policyToolActive])).ok) problems.push('a rule was deleted');
+        const removed = await attempt(tx, "update policy_tools set status = 'removed', removed_at = now() where id = $1", [IDS.policyToolActive]);
+        if (!removed.ok) problems.push(`control failed: an active rule cannot be removed (${removed.error})`);
+        if ((await attempt(tx, "update policy_tools set status = 'active', confirmed_via = 'telegram', activated_at = now(), removed_at = null where id = $1", [IDS.policyToolActive])).ok) problems.push('a removed rule came back');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-policy-rule-must-be-well-formed-and-a-tool-has-one-live-rule',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const good = await attempt(tx, "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.read_orders', 'routine', 'read', 'telegram')");
+        if (!good.ok) problems.push(`control failed: a well-formed rule was refused (${good.error})`);
+        const bad = [
+          ['an ask rule without a category', "insert into policy_tools (tool, kind, proposed_via, status, confirmed_via, activated_at) values ('acme.a', 'ask', 'telegram', 'active', 'telegram', now())"],
+          ['an ask rule with an access tag', "insert into policy_tools (tool, kind, category, access, proposed_via) values ('acme.b', 'ask', 'spend', 'read', 'telegram')"],
+          ['a routine rule without an access tag', "insert into policy_tools (tool, kind, proposed_via) values ('acme.c', 'routine', 'telegram')"],
+          ['a routine rule with a category', "insert into policy_tools (tool, kind, category, access, proposed_via) values ('acme.d', 'routine', 'spend', 'read', 'telegram')"],
+          ['the unknown category', "insert into policy_tools (tool, kind, category, proposed_via, status, confirmed_via, activated_at) values ('acme.e', 'ask', 'unknown', 'telegram', 'active', 'telegram', now())"],
+          ['a name with capitals', "insert into policy_tools (tool, kind, access, proposed_via) values ('Acme.Read', 'routine', 'read', 'telegram')"],
+          ['a name with a look-alike letter', "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.booKs', 'routine', 'read', 'telegram')"],
+          ['an agent as the proposer', "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.f', 'routine', 'read', 'agent')"],
+          ['an active rule nobody confirmed', "insert into policy_tools (tool, kind, access, status, proposed_via) values ('acme.g', 'routine', 'read', 'active', 'telegram')"],
+          ['a second live rule for the same tool', "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.read_orders', 'routine', 'write', 'telegram')"],
+        ];
+        for (const [what, sql] of bad) if ((await attempt(tx, sql)).ok) problems.push(`accepted ${what}`);
+        await attempt(tx, "update policy_tools set status = 'removed', removed_at = now() where tool = 'acme.read_orders'");
+        const again = await attempt(tx, "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.read_orders', 'routine', 'write', 'telegram')");
+        if (!again.ok) problems.push(`a removed tool could not be proposed again (${again.error})`);
       });
       return verdict(problems.length === 0, problems.join('; '));
     },

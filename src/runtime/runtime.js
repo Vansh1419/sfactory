@@ -46,9 +46,11 @@ function createRuntime({ audit }) {
   function register(name, def) {
     if (commands.has(name)) throw new Error(`command already registered: ${name}`);
     if (typeof def?.handler !== 'function') throw new Error(`command ${name} needs a handler`);
+    if (def.auditArgs !== undefined && typeof def.auditArgs !== 'function') throw new Error(`command ${name}: auditArgs must be a function`);
     commands.set(name, {
       handler: def.handler,
       validate: def.validate,
+      auditArgs: def.auditArgs,
       audit: def.audit ?? 'always',
       allowWhenBlocked: Boolean(def.allowWhenBlocked),
     });
@@ -67,8 +69,18 @@ function createRuntime({ audit }) {
 
     const actor = ctx.actor ?? 'founder';
     if (cmd.audit === 'always') {
+      // A command may say which of its arguments are recorded (free text, such as a note, should not sit
+      // in the log). If that choice itself fails, record nothing rather than everything.
+      let recorded = args;
+      if (cmd.auditArgs) {
+        try {
+          recorded = cmd.auditArgs(args);
+        } catch {
+          recorded = {};
+        }
+      }
       try {
-        await audit.append({ actorType: actor, action: `command.${name}`, detail: { args } });
+        await audit.append({ actorType: actor, action: `command.${name}`, detail: { args: recorded } });
       } catch {
         return fail('audit_unavailable', 'Nothing was done, because the action could not be recorded in the audit log.');
       }

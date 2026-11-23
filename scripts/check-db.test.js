@@ -12,10 +12,10 @@ const neverCalled = async () => {
   throw new Error('fetch must not be called');
 };
 
-test('lists the 11 core tables from the plan', () => {
+test('lists the 12 core tables from the plan', () => {
   assert.deepEqual(
     [...db.TABLES].sort(),
-    ['agent_events', 'agents', 'audit_log', 'clients', 'decisions', 'memory', 'pod_members', 'pods', 'projects', 'scaling_rules', 'tasks'],
+    ['agent_events', 'agents', 'audit_log', 'clients', 'decisions', 'memory', 'pod_members', 'pods', 'policy_tools', 'projects', 'scaling_rules', 'tasks'],
   );
 });
 
@@ -54,6 +54,6 @@ test('missing settings and non-Supabase URLs are refused without any network cal
 
 test('checkAll checks every table', async () => {
   const results = await db.checkAll(ENV, reply(200));
-  assert.equal(results.length, 11);
+  assert.equal(results.length, 12);
   assert.ok(results.every((r) => r.status === 'ok'));
 });
