@@ -52,6 +52,9 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `tool-gate` | the step 1.10 "done when", end to end with the real policy, loader, filesystem and GitHub tools and graph | 9 | 100% | 1.10 (gate) | pass |
 | `shared-skills` | `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` | 9 | 100% | 1.10 (skills) | pass |
 | `phase1-gate` | `scripts/gate1.js` (Gate 1, also run by hand with `npm run gate:1`) | 3 | 100% | 1.11 | pass |
+| `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
+| `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 19 | 100% | 2.1 | pass |
+| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 21 | 100% | 2.1 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -392,6 +395,32 @@ The founder's path, run twice (the founder approves; the founder rejects): a `/g
 Checked by mutation on Nov 25, 2026: 7 deliberate breaks in the product code (cards never pushed to Telegram, the purchase made routine, the tool run not audited, a rejection still running the tool, the end of a resumed run not announced, a tap recorded as a dashboard answer, the card not announced to the window), all caught.
 
 **Found by the gate:** after the founder's tap, nobody told them how the run ended (`/goal` only reports the first stage), so a purchase could happen with no message afterwards. Fixed with `onRunFinished` in the orchestrator service (8 new `orchestrator-service` cases) and `announceRun` in the bot (2 new `telegram-bot` cases): the end of a resumed run is announced once, only when it ends done or failed (never for a run that pauses on another card), with the same honest summary and any text a task produced.
+
+### skills-loader
+
+Suite: `.claude/evals/suites/skills-loader.js`. Code under test: `src/runtime/agents/skills.js` (`loadSkills`, `skillsText`, `CHARTER`).
+
+**Cases:** 10
+
+Covers: shared skills first then the team's own, never another team's; a team name cannot reach any other folder; a skill with a wrong name, no description, no body, no frontmatter or too long is skipped with a note while the good ones stay; a folder that is a link is skipped; a missing or odd folder gives no skills and never throws; the total is capped (shared skills are the last to be cut); the text built for an agent keeps the order and is cut to a limit; and the skills that ship load clean.
+
+### agent-loop
+
+Suite: `.claude/evals/suites/agent-loop.js`. Code under test: `src/runtime/agents/agent.js` (`createAgent`). A scripted model, the real policy and the real tool loader.
+
+**Cases:** 19
+
+Covers: one JSON action per model call (a tool, or finish); the first prompt holds the role, the skills, the team's tools and the task; a tool result comes back fenced as data; a tool the team does not have, or nobody has heard of, is not run and the agent is told; **an action the policy says needs the founder is never run: the agent stops and hands the request back**; step and token caps and clamped limits; garbage answers are steps and three in a row fail the run; a model that cannot be reached stops the run without throwing; a tool run is audited before it runs as this agent and an audit failure stops the run; secrets never reach a prompt, the audit log or the output; a failing tool's own text is never shown; long results and outputs are cut; the task and feedback are data in random fences; a bad task never throws or calls the model; the lead uses the strong tier and the sensitive setting reaches the router; one run uses one router task id.
+
+### team-framework
+
+Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/agents/lead.js`, `team.js` and `index.js` (the factory). Real Postgres with the real migrations: the `tasks`, `agents` and `audit_log` rows are real. The model is scripted; the policy, tool config, skills and tool loader are real.
+
+**Cases:** 21
+
+The step 2.1 "done when" is the first two cases: a team of one lead and one worker completes a task (queued, in_progress, in_review, done, with the lead's review before done), and **the lead rejects a bad worker output once, the worker tries again with the feedback in its prompt, and the task is done**. Also: rejected twice blocks the task with a reason and it is never done; a review that is not a plain `accept: true` (yes, "true", 1, `{}`, garbage, no answer) counts as a rejection; zero allowed revisions blocks at the first rejection; a plan naming an unknown worker, empty, too long or garbled runs no worker and blocks the task; a two-subtask plan runs in order and stops at the first block; a worker that needs the founder blocks the task and hands the request back, a worker that stops or fails blocks it with a plain reason; every status change is audited before it is made and an audit failure leaves the status where it was; the audit log has the task from creation to done in order; agents are registered once with the right role and tier; a task with no or an odd title is refused with no row and no model call; a secret in a task is never stored or logged. The factory: builds a team from `shared` plus its own tools and skills and no other team's, refuses to build without the company charter, refuses unknown teams and odd names, reports config problems, never gives a team a tool with no policy rule, and passes its limits to every agent.
+
+Checked by mutation on Nov 25, 2026: 14 deliberate breaks (a task done without the lead accepting, a truthy review counting as yes, status changes not audited, an unknown worker allowed in a plan, a crucial action run instead of handed back, the tool run not audited first, no step cap, tool output and final output not cleaned of secrets, no charter required, another team's tools loaded, the feedback not sent back, unlimited revisions, any team name reaching a folder), all caught.
 
 ### goals-view
 

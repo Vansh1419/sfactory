@@ -220,10 +220,11 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 
 ### Phase 2: Client-facing teams (days 8–14)
 
-**2.1 Team lead and worker framework** (one day)
+**2.1 Team lead and worker framework** (one day) — status: **done** (Nov 25, 2026; the framework is built and graded, and not yet wired into the app: the first real team is 2.3)
 - A generic agent factory: loads `shared` plus the team's MCP config and skills, and runs under the step and token caps.
 - Lead plans the team's work and checks each worker's output before a task is marked done.
 - **Done when:** a test team of one lead and one worker completes a task, and the lead rejects a bad worker output once.
+- **Done:** `src/runtime/agents/` (skills loader, agent loop, lead, team, factory) with the 10-case `skills-loader`, 19-case `agent-loop` and 21-case `team-framework` evals; the done-when is the first two `team-framework` cases, on a real database. A crucial action stops the agent and is handed back as a request (turning it into a founder card is part of 2.3 and 2.4). Not yet tried with a real model.
 
 **2.2 Outbound review agent** (half a day)
 - Every outbound client message goes through a review agent first.
