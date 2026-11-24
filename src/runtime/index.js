@@ -15,7 +15,14 @@ const { buildProviders } = require('./providers');
 const { createTelegramService, telegramProblem } = require('./telegram');
 const { createOrchestratorService } = require('./orchestrator/service');
 const { createModelPlanner, createModelCardWriter, buildToolCatalogue } = require('./orchestrator/model');
-const { listRules } = require('./policy');
+const { listRules, isBuiltIn, normaliseTool } = require('./policy');
+const { createToolLoader } = require('./tools');
+const { BUILTIN_TOOLS } = require('./tools/builtin');
+const { createFilesystemTools } = require('./tools/filesystem');
+const { createFetchTools } = require('./tools/fetch');
+const { createGitHubTools } = require('./tools/github');
+const { createSupabaseTools } = require('./tools/supabase');
+const { loadToolConfig, selectTools } = require('./tools/config');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -26,7 +33,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -51,7 +58,6 @@ function createApp({ env, fetchImpl, version }) {
   // The decisions service files, answers and chases decisions for the dashboard, the Telegram bot
   // and the orchestrator. It refuses while the runtime is blocked.
   const decisions = createDecisionService({ store, audit, emit, isBlocked, policy: policyTools.policy });
-  registerCommands(runtime, { store, version, decisions });
 
   // The model router: Groq (once its key is set), then local Ollama, then Claude Code. Every attempt is
   // written to the audit log before it is made, and if that write fails no model is called. Like the
@@ -66,22 +72,47 @@ function createApp({ env, fetchImpl, version }) {
   // founder. It finds a run again from its card, so an answer from Telegram or the dashboard resumes it,
   // and runs waiting when the app was closed are resumed on start. The planner and the card writer are written
   // by a model through the router (the goal and the card facts may be seen by hosted providers, as the router's
-  // defaults allow; secrets in arguments are removed first). Tools are not connected yet (step 1.10), so a
-  // routine action that is planned fails as "not connected" and a spend still files its card. The policy is the live one.
-  const notConnected = (what) => async () => {
-    throw new Error(`${what} is not connected yet`);
+  // defaults allow; secrets in arguments are removed first). Only the tools the loader has loaded can run; any other routine action fails as
+  // "not connected" and a spend still files its card. The policy is the live one.
+  // The tool loader (step 1.10): only a tool with a policy rule (built-in or one the founder activated) is loaded,
+  // and the rule is checked again on every call. Its tools hand plain text back to the run.
+  const hasRule = async (tool) => {
+    if (isBuiltIn(tool)) return true;
+    const name = normaliseTool(tool);
+    return (await policyTools.list()).some((row) => row.status === 'active' && normaliseTool(row.tool) === name);
   };
+  // The Filesystem tools read inside ONE folder: FILESYSTEM_ROOT, or the app's own folder when main.js passes it.
+  // With neither there are no filesystem tools (never a default of "the whole disk").
+  const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot });
+  // Which of the available tools are used is decided by config/mcp/shared.yaml (an allow-list with a read/write tag
+  // check that fails closed: without the file there are no tools). The policy rule is still required by the loader.
+  const toolSelection = selectTools({
+    catalogue: [
+      ...BUILTIN_TOOLS,
+      ...filesystemTools,
+      ...createFetchTools(),
+      // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
+      ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
+      ...createSupabaseTools({ store }),
+    ],
+    config: loadToolConfig({ dir: toolConfigDir }),
+  });
+  const toolLoader = createToolLoader({ tools: toolSelection.tools, hasRule });
   const orchestrator = createOrchestratorService({
     store,
     rawAudit: audit,
     decisions,
     policy: policyTools.policy,
     runtime,
-    planner: createModelPlanner({ router, listTools: buildToolCatalogue({ rules: listRules, policyTools }) }),
+    planner: createModelPlanner({ router, listTools: buildToolCatalogue({ rules: listRules, policyTools, details: () => toolLoader.describe() }) }),
     writeCard: createModelCardWriter({ router }),
-    runTool: notConnected('Tool loading'),
+    runTool: (request) => toolLoader.run(request),
     onError: () => runtime.emit('orchestrator.error', {}),
   });
+
+  // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
+  // the founder's goals from it.
+  registerCommands(runtime, { store, version, decisions, orchestrator });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -120,6 +151,12 @@ function createApp({ env, fetchImpl, version }) {
           await policyTools.refresh();
         } catch (err) {
           runtime.emit('policy.degraded', { code: typeof err?.code === 'string' && /^[a-z_]+$/.test(err.code) ? err.code : 'error' });
+        }
+        try {
+          await toolLoader.load();
+          if (toolSelection.problems.length > 0) runtime.emit('tools.degraded', { count: toolSelection.problems.length });
+        } catch {
+          runtime.emit('tools.degraded', {});
         }
         runtime.emit('runtime.ready', {});
         if (telegramIssue) runtime.emit('telegram.problem', { message: telegramIssue });

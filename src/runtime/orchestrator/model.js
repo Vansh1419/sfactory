@@ -61,7 +61,7 @@ function parseJson(text, open, close) {
  * The list of tools given to the planner: the built-in ones plus the founder's ACTIVE additions. A proposal
  * that has not been confirmed is not in it. If the founder's table cannot be read the built-in tools are used.
  */
-function buildToolCatalogue({ rules, policyTools }) {
+function buildToolCatalogue({ rules, policyTools, details = () => [] }) {
   return async function listTools() {
     const tools = rules().map((r) => ({ tool: r.tool, access: r.access ?? null, asks: Boolean(r.alwaysAsks), category: r.category ?? null }));
     try {
@@ -72,12 +72,22 @@ function buildToolCatalogue({ rules, policyTools }) {
     } catch {
       // Built-in tools only: planning still works, and the founder's additions return when the table does.
     }
-    return tools;
+    // A loaded tool says what it does and which arguments it takes, so the planner can fill them in.
+    let loaded = [];
+    try {
+      loaded = details();
+    } catch {
+      // The plain list still works.
+    }
+    return tools.map((t) => {
+      const d = loaded.find((l) => l.tool === t.tool);
+      return d ? { ...t, summary: d.summary, args: d.args } : t;
+    });
   };
 }
 
 const describeTool = (t) =>
-  `- ${t.tool} (${t.access ?? 'read or write'}${t.asks ? `; always asks the founder first: ${CATEGORY_LABEL[t.category] ?? 'needs approval'}` : ''})`;
+  `- ${t.tool} (${t.access ?? 'read or write'}${t.asks ? `; always asks the founder first: ${CATEGORY_LABEL[t.category] ?? 'needs approval'}` : ''})${typeof t.summary === 'string' ? `: ${t.summary}` : ''}${typeof t.args === 'string' ? ` Arguments: ${t.args}` : ''}`;
 
 // ---- the planner -----------------------------------------------------------------------------------
 

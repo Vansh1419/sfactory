@@ -66,9 +66,16 @@ const GOAL_USAGE = 'Usage: /goal <what you want done>\nFor example: /goal Buy a 
 function describeRun(result) {
   if (!result || typeof result !== 'object') return 'The run stopped.';
   if (result.status === 'failed') return clip(`I could not start that. ${typeof result.message === 'string' ? result.message : ''}`, 600);
-  const head = { waiting: 'The plan is under way and waiting for your decision (the card is in this chat).', done: 'Finished.' }[result.status] ?? 'The run stopped.';
+  // "Finished" must not hide that a task did not go ahead (a card that could not be written, a tool that is not
+  // known, an action that failed). Those are said first, with a count; a task you rejected is your own choice.
+  const results = Array.isArray(result.results) ? result.results : [];
+  const stuck = results.filter((r) => typeof r?.outcome === 'string' && (r.outcome.startsWith('blocked_') || r.outcome === 'failed')).length;
+  const finished = stuck > 0 ? `Finished, but ${stuck} task${stuck === 1 ? '' : 's'} did not go ahead.` : 'Finished.';
+  const head = { waiting: 'The plan is under way and waiting for your decision (the card is in this chat).', done: finished }[result.status] ?? 'The run stopped.';
   const lines = (Array.isArray(result.log) ? result.log : []).filter((l) => typeof l === 'string').map((l) => `- ${clip(l, MAX_LOG_LINE_CHARS)}`);
-  return clip([head, ...lines].join('\n'), MAX_MESSAGE_CHARS);
+  // Text a task produced (a draft, a script) is sent as it is, below the summary, with its line breaks kept.
+  const outputs = results.filter((r) => typeof r?.output === 'string' && r.output !== '').map((r) => `${clip(r.title, MAX_LOG_LINE_CHARS)}:\n${r.output}`);
+  return [clip([head, ...lines].join('\n'), MAX_MESSAGE_CHARS), ...outputs].join('\n\n').slice(0, MAX_MESSAGE_CHARS);
 }
 const ADDTOOL_USAGE = 'Usage:\n/addtool <tool> ask <spend|people|launch|legal>\n/addtool <tool> routine <read|write>';
 const REMOVETOOL_USAGE = 'Usage:\n/removetool <tool>';

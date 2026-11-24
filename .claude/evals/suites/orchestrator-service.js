@@ -41,7 +41,9 @@ async function world(over = {}) {
 
   const fake = over.fake ?? (await startFakeSupabase());
   const store = createRestStore({ url: fake.url, serviceKey: fake.serviceKey });
-  const rawAudit = createAudit(store);
+  const realAudit = createAudit(store);
+  // `auditFails(entry)` makes an audit write fail, to see what the service does when it cannot record something.
+  const rawAudit = { append: async (entry) => { if (over.auditFails?.(entry)) throw new Error('audit down'); return realAudit.append(entry); } };
   const calls = over.calls ?? { run: [], errors: [], created: 0 };
   const rows = over.rows ?? new Map();
 
@@ -273,6 +275,112 @@ const cases = [
       w.decisions.answer(paused.waitingFor, 'approved');
       await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
       return verdict(w.calls.run.length === 1, json(w.calls.run));
+    }),
+  },
+
+  // ---- The window's list of goals ----------------------------------------------------------------------------
+  {
+    id: 'submitting-a-goal-leaves-an-audit-entry-with-only-its-thread-id',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const res = await svc.submitGoal({ goal: 'SECRET GOAL TEXT about the launch' });
+      const entries = await w.store.select('audit_log', { where: { action: 'orchestrator.goal_submitted' } });
+      const ok = entries.length === 1 && entries[0].actor_type === 'founder' && entries[0].detail.threadId === res.threadId && json(Object.keys(entries[0].detail)) === json(['threadId']) && !json(entries).includes('SECRET GOAL TEXT');
+      return verdict(ok, json(entries));
+    }),
+  },
+  {
+    id: 'if-the-submission-cannot-be-audited-nothing-is-planned-or-announced',
+    check: () => inWorld({ auditFails: (e) => e.action === 'orchestrator.goal_submitted' }, async (w) => {
+      let planned = 0;
+      const svc = w.build({ config: { planner: async () => { planned += 1; return [spend('Buy it')]; } } });
+      const res = await svc.submitGoal({ goal: GOAL });
+      const checkpoints = await w.store.select('graph_checkpoints', {});
+      return verdict(res.status === 'failed' && res.reason === 'audit_failed' && planned === 0 && w.calls.run.length === 0 && w.calls.created === 0 && checkpoints.length === 0, json({ res: [res.status, res.reason], planned, checkpoints: checkpoints.length }));
+    }),
+  },
+  {
+    id: 'a-bad-goal-is-refused-without-an-audit-entry',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const blank = await svc.submitGoal({ goal: '   ' });
+      const huge = await svc.submitGoal({ goal: 'x'.repeat(2001) });
+      const entries = await w.store.select('audit_log', { where: { action: 'orchestrator.goal_submitted' } });
+      return verdict(blank.reason === 'bad_request' && huge.reason === 'bad_request' && entries.length === 0, json({ blank: blank.reason, huge: huge.reason, entries: entries.length }));
+    }),
+  },
+  {
+    id: 'the-list-shows-recent-goals-newest-first-with-goal-status-and-tasks',
+    check: () => inWorld({ tasks: [routine('Draft the note'), spend('Buy it')] }, async (w) => {
+      const svc = w.build();
+      const first = await svc.submitGoal({ goal: 'First goal' });
+      const second = await svc.submitGoal({ goal: 'Second goal' });
+      const list = await svc.listGoals({});
+      const ok = list.length === 2 && list[0].threadId === second.threadId && list[1].threadId === first.threadId && list[0].goal === 'Second goal' && list[0].status === 'waiting' && list[0].waitingFor === second.waitingFor && json(list[0].tasks.map((t) => t.title)) === json(['Draft the note', 'Buy it']) && typeof list[0].submittedAt === 'string';
+      return verdict(ok, json(list.map((g) => [g.threadId.slice(0, 4), g.goal, g.status])));
+    }),
+  },
+  {
+    id: 'a-goal-still-being-planned-is-listed-as-running-with-its-text',
+    check: () => inWorld({}, async (w) => {
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const svc = w.build({ config: { planner: async () => { await gate; return [routine('Draft')]; } } });
+      const submitting = svc.submitGoal({ goal: 'Plan the launch' });
+      for (let i = 0; i < 40; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      const during = await svc.listGoals({});
+      release();
+      await submitting;
+      const after = await svc.listGoals({});
+      return verdict(during.length === 1 && during[0].status === 'running' && during[0].goal === 'Plan the launch' && after[0].status === 'done', json({ during: during.map((g) => [g.status, g.goal]), after: after.map((g) => g.status) }));
+    }),
+  },
+  {
+    id: 'a-goal-that-failed-at-planning-is-still-listed-with-its-reason',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build({ config: { planner: async () => { throw new Error(`model down ${SECRET}`); } } });
+      const res = await svc.submitGoal({ goal: 'Make me a sandwich' });
+      const list = await svc.listGoals({});
+      const ok = list.length === 1 && list[0].status === 'failed' && list[0].reason === 'planner_failed' && list[0].goal === 'Make me a sandwich' && !json(list).includes(SECRET);
+      return verdict(ok, json({ res: res.reason, list: list.map((g) => [g.status, g.reason, g.goal]) }));
+    }),
+  },
+  {
+    id: 'the-list-shows-the-final-state-after-the-founder-answers',
+    check: () => inWorld({ tasks: [spend('Buy it')] }, async (w) => {
+      const svc = w.build();
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      const [goal] = await svc.listGoals({});
+      return verdict(goal.status === 'done' && goal.waitingFor === null && json(goal.results.map((r) => r.outcome)) === json(['ran']), json(goal));
+    }),
+  },
+  {
+    id: 'the-list-honours-the-limit-and-caps-it-at-fifty',
+    check: () => inWorld({ tasks: [routine('Draft')] }, async (w) => {
+      const svc = w.build();
+      for (let i = 0; i < 4; i += 1) await svc.submitGoal({ goal: `Goal ${i}` });
+      const two = await svc.listGoals({ limit: 2 });
+      const none = await svc.listGoals({ limit: 0 });
+      const silly = await svc.listGoals({ limit: 5000 });
+      const bad = await svc.listGoals({ limit: 'x' });
+      return verdict(two.length === 2 && two[0].goal === 'Goal 3' && none.length >= 1 && silly.length === 4 && bad.length === 4, json({ two: two.length, none: none.length, silly: silly.length, bad: bad.length }));
+    }),
+  },
+  {
+    id: 'a-run-that-cannot-be-read-is-listed-as-failed-and-the-others-still-appear',
+    check: () => inWorld({ tasks: [routine('Draft')] }, async (w) => {
+      const good = w.build();
+      const a = await good.submitGoal({ goal: 'Readable goal' });
+      const b = await good.submitGoal({ goal: 'Unreadable goal' });
+      // A store that cannot read ONE run's checkpoints.
+      const flaky = { select: async (table, options) => { if (table === 'graph_checkpoints' && options?.where?.thread_id === b.threadId) throw new Error(`db hiccup ${SECRET}`); return w.store.select(table, options); }, insert: w.store.insert, update: w.store.update };
+      const list = await w.build({ store: flaky }).listGoals({});
+      const bad = list.find((g) => g.threadId === b.threadId);
+      const okRun = list.find((g) => g.threadId === a.threadId);
+      return verdict(list.length === 2 && bad.status === 'failed' && okRun.status === 'done' && okRun.goal === 'Readable goal' && !json(list).includes(SECRET), json(list.map((g) => [g.goal, g.status])));
     }),
   },
 

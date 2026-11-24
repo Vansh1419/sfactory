@@ -380,6 +380,110 @@
     "expect": { "pass": false, "problems": ["cost_format"] }
   },
   {
+    "id": "good-cost-not-stated-with-medium-risk",
+    "card": {
+      "decide": "Should we buy the web address mylaunch.example for the new landing page?",
+      "why_now": "The page needs an address before it can go live.",
+      "if_yes": "We buy the address and the page can use it.",
+      "if_no": "The page has no address yet and the launch waits.",
+      "cost": "Price not stated in the request",
+      "risk": { "level": "Medium", "reason": "Money is spent and the price is not known yet." },
+      "recommendation": "No, not until the price is confirmed."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "good-cost-unknown-with-high-risk",
+    "card": {
+      "decide": "Should we pay the design agency for the new logo?",
+      "why_now": "They sent the final files today.",
+      "if_yes": "The agency is paid and hands over the files.",
+      "if_no": "The agency keeps the files until we decide.",
+      "cost": "Unknown. The request does not give a price in rupees or dollars.",
+      "risk": { "level": "High", "reason": "A payment cannot be taken back and the amount is not known." },
+      "recommendation": "No, first ask the agency for the invoice."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "good-cost-to-be-confirmed",
+    "card": {
+      "decide": "Should we upgrade the email plan?",
+      "why_now": "We are close to the sending limit.",
+      "if_yes": "The plan is upgraded and the limit goes up.",
+      "if_no": "Some emails may be held back at the limit.",
+      "cost": "To be confirmed",
+      "risk": { "level": "Medium", "reason": "The monthly price is not known yet." },
+      "recommendation": "Yes, once the price is checked."
+    },
+    "expect": { "pass": true, "problems": [] }
+  },
+  {
+    "id": "bad-cost-not-known-but-low-risk",
+    "card": {
+      "decide": "Should we buy the web address mylaunch.example?",
+      "why_now": "The page needs an address.",
+      "if_yes": "We buy it.",
+      "if_no": "The launch waits.",
+      "cost": "Not known yet",
+      "risk": { "level": "Low", "reason": "It is only a web address." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["unknown_cost_low_risk"] }
+  },
+  {
+    "id": "bad-cost-unknown-with-a-number-in-one-currency",
+    "card": {
+      "decide": "Should we buy the web address mylaunch.example?",
+      "why_now": "The page needs an address.",
+      "if_yes": "We buy it.",
+      "if_no": "The launch waits.",
+      "cost": "Unknown, maybe ₹500",
+      "risk": { "level": "Medium", "reason": "The price is a guess." },
+      "recommendation": "No, confirm the price first."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
+    "id": "bad-cost-no-cost-is-not-an-unknown",
+    "card": {
+      "decide": "Can we send the proposal to Client B?",
+      "why_now": "They asked for it today.",
+      "if_yes": "The proposal is sent.",
+      "if_no": "It is held back.",
+      "cost": "No cost",
+      "risk": { "level": "Medium", "reason": "It is a standard proposal." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
+    "id": "bad-cost-vague-amount-is-not-an-unknown",
+    "card": {
+      "decide": "Should we buy the web address mylaunch.example?",
+      "why_now": "The page needs an address.",
+      "if_yes": "We buy it.",
+      "if_no": "The launch waits.",
+      "cost": "A small amount",
+      "risk": { "level": "Medium", "reason": "Money is spent." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
+    "id": "bad-cost-unknown-said-elsewhere-does-not-count",
+    "card": {
+      "decide": "Should we buy the web address mylaunch.example?",
+      "why_now": "The page needs an address, and the price is not known yet.",
+      "if_yes": "We buy it.",
+      "if_no": "The launch waits.",
+      "cost": "Cheap",
+      "risk": { "level": "Medium", "reason": "Money is spent." },
+      "recommendation": "Yes."
+    },
+    "expect": { "pass": false, "problems": ["cost_format"] }
+  },
+  {
     "id": "bad-risk-level-lowercase",
     "card": {
       "decide": "Can we send the proposal to Client B?",

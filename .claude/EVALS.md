@@ -31,17 +31,28 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 |---|---|---|---|---|---|
 | `invariants` | The repo itself: architecture, security settings, docs in sync | 13 | 100% | 0.4 | pass |
 | `policy-check` | `src/runtime/policy.js` | 44 | 100% | 1.4 | pass |
-| `decision-cards` | `src/runtime/cards.js` | 44 | 100% | 1.5 | pass |
+| `decision-cards` | `src/runtime/cards.js` | 52 | 100% | 1.5 | pass |
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
-| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 68 | 100% | 1.8 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 70 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
-| `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 41 | 100% | 1.7c | pass |
-| `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 16 | 100% | 1.7d | pass |
+| `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
+| `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 25 | 100% | 1.7d | pass |
 | `orchestrator-model` | `src/runtime/orchestrator/model.js` (the model-written planner and card writer), with a scripted router | 26 | 100% | 1.7e | pass |
-| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 26 | 100% | 1.2 | pass |
+| `approval-queue` | `src/renderer/queue.mjs` (the logic behind the approval queue screen) | 28 | 100% | 1.9 | pass |
+| `tool-loader` | `src/runtime/tools/{index,builtin,files}.js` | 29 | 100% | 1.10 (loader) | pass |
+| `zip-file` | `src/renderer/zip.mjs` (the .zip the Download button makes) | 9 | 100% | 1.10 follow-up | pass |
+| `filesystem-tools` | `src/runtime/tools/filesystem.js` (read a file or list a folder inside the project folder) | 21 | 100% | 1.10 (Filesystem) | pass |
+| `tool-config` | `src/runtime/tools/config.js` (shared.yaml plus a team file) | 19 | 100% | 1.10 (config) | pass |
+| `fetch-tool` | `src/runtime/tools/fetch.js` (read a public web page) | 17 | 100% | 1.10 (Fetch) | pass |
+| `github-tools` | `src/runtime/tools/github.js` (read a file, list, open and merge pull requests) | 15 | 100% | 1.10 (GitHub) | pass |
+| `supabase-tool` | `src/runtime/tools/supabase.js` (read-only rows from a few tables) | 13 | 100% | 1.10 (Supabase) | pass |
+| `tool-gate` | the step 1.10 "done when", end to end with the real policy, loader, filesystem and GitHub tools and graph | 9 | 100% | 1.10 (gate) | pass |
+| `shared-skills` | `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` | 9 | 100% | 1.10 (skills) | pass |
+| `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
+| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
@@ -98,7 +109,7 @@ Judgment calls worth revisiting (they come from my reading of `kickstart.md`, no
 
 Suite: `.claude/evals/suites/decision-cards.js`. Dataset: `.claude/evals/datasets/decision-cards.json`. Code under test: `src/runtime/cards.js`. Unit tests (`src/runtime/cards.test.js`, 26 tests) back the dataset up: every jargon term, a corpus of ordinary sentences that must never be flagged, hostile input, and what the loop promises.
 
-**Cases:** 44
+**Cases:** 52
 
 Contract: `checkCard(card) -> { pass, problems, findings }`, where problems are `missing_field`, `jargon`, `contains_code`, `bad_risk_level`, `cost_format` and `time_format`; and `produceCard({ request, write, maxAttempts }) -> { status: 'ready', card, attempts } | { status: 'flagged', problems, rejectedDraft, attempts }`. The full contract is in the header of the suite file. This grades the deterministic checker and the writer-checker loop (with a scripted writer), not the model that will write the cards.
 
@@ -111,6 +122,8 @@ Contract: `checkCard(card) -> { pass, problems, findings }`, where problems are 
 Checked by mutation on Nov 23, 2026: 36 realistic mistakes were introduced into `cards.js` one at a time (a check removed, explanations that are too thin accepted, invisible characters or look-alike letters not folded, `details` read like the other fields, any time zone accepted, one currency accepted, case-insensitive risk levels, an everyday word made jargon, a retry too many, a flagged result that carries a card, error text leaking, no snapshot before checking, and more). The first run missed 4: two thin-explanation rules that hid each other, SQL `select ... from` never tested, and a deleted jargon term (the tests read the term list, so deleting a term deleted its test). Tests were added for each, and all 36 are now caught.
 
 Judgment calls, **confirmed by the founder on Nov 23, 2026** (the three below; the jargon list itself is still a starting set to tune against real cards): the jargon list is a starting set of 56 words and will need tuning against real cards (words like `production`, `branch` and `ram` are deliberately not on it, because they are ordinary words or names); an explanation in brackets needs at least three words and twelve letters; a clock time must be followed by `IST`, so a card that also quotes another zone in brackets is rejected; every cost must show both currencies with numbers, so "free" has to be written `₹0 ($0)`.
+
+**Unknown price (Nov 24, 2026, the founder's decision):** a goal such as "buy a domain" has no price in it, and a writer that must not invent one could never produce a card (found when a real run wrote three honest drafts such as "Price not stated" and the checker rejected every one, so no card was made and the task was skipped quietly). The checker now also accepts a cost with **no digits at all** that says in words it is not known ("unknown", "not stated", "not yet confirmed", "to be confirmed"). A half-guess such as "Unknown, maybe ₹500", "No cost", "A small amount" or the unknown said only in another field still has to follow the two-currency rule, and money of an unknown size can never be "Low" risk (new problem code `unknown_cost_low_risk`). The writer's instructions teach the exact wording "Price not known yet". 8 dataset cases (3 that must pass, 5 that must fail) and 2 unit tests; checked by breaking the rule 5 ways, all caught (the first run missed removing the instruction, so a unit test was added). Live: three real runs of the same goal all produced a card.
 
 ### claude-code-provider
 
@@ -175,7 +188,7 @@ Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; 
 
 Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
 
-**Cases:** 68
+**Cases:** 70
 
 Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
 
@@ -192,6 +205,8 @@ Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?
 | Poller | 7 | On start it skips whatever piled up while the app was closed (so a restart cannot replay an old confirm or removal; a tap made while closed must be made again); updates that arrive after `stop()` are not handled; starting twice runs one loop; updates are handled in order and the offset moves past them; a handler that throws neither stops the loop nor repeats the update; a failed poll waits longer each time and then recovers; `stop()` ends the loop |
 
 Judgment calls to confirm with the founder: messages from other chats get no reply and no audit entry (a reply would tell a stranger the bot exists, and an entry per message would let a stranger fill the log); `/brief`, `/status` and `/pause` are honest "not available yet" replies until the orchestrator and the agent controls exist; all text is plain, with no formatting, so a card cannot be made to look like something it is not.
+
+**Honest summaries (Nov 24, 2026):** 1 new case. A run in which a task was blocked or failed no longer ends with a plain "Finished.": it says "Finished, but N task(s) did not go ahead." (a task you rejected is your own choice and does not count).
 
 ### graph-checkpointer
 
@@ -215,7 +230,7 @@ Judgment calls: deleting a thread is unsupported, so finished runs stay in the t
 
 Suite: `.claude/evals/suites/orchestrator.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/orchestrator/graph.js`, with 5 unit tests in `graph.test.js`. The planner, card writer and tool runner are passed in, so no model or real tool is involved. The policy is the REAL policy (`src/runtime/policy.js`); the decisions service is a small fake that files cards and lets a test answer them; one case uses the real checkpoint store over a real Postgres.
 
-**Cases:** 41
+**Cases:** 57
 
 Contract: `createOrchestrator({ planner, writeCard, runTool, decisions, policy, checkpointer, audit, emit? })` returns `start({ goal, threadId? })`, `resume({ threadId })` and `status({ threadId })`. Results are `{ threadId, status: 'waiting' | 'done' | 'failed' | 'unknown', waitingFor, reason?, results, log }`. The full contract, the outcomes and the failure reasons are in the header of the suite file.
 
@@ -236,6 +251,153 @@ Checked by mutation on Nov 24, 2026: 10 realistic mistakes were each introduced 
 Checked by mutation a second time on Nov 24, 2026, after the review fixes: 8 more mistakes (saves back to the background, an interrupted run called "waiting", the start id not reserved, events that can throw inside a step, arguments with functions dropped quietly, no size cap on arguments, a card left behind when it cannot be linked, the waiting entry never written). All 8 are caught. **Finding along the way:** LangGraph's default saves each step in the background, so when saving fails the run keeps going and runs later tools that are not being recorded; the orchestrator now runs with `durability: 'sync'` (each step is saved before the next starts).
 
 Judgment calls to confirm with the founder: a rejected or cancelled spend skips only that task and the rest of the plan still runs; a failed action is never retried automatically; a task whose card cannot be written is skipped, not run; a plan is capped at 20 tasks and a goal at 2000 characters; a run that stopped part-way is reported `interrupted` and left for you to re-plan, never continued automatically (a tool runs at most once). A known gap: if the app stops between filing a card and saving the run, that card stays pending but no run waits on it, so answering it does nothing (it never runs anything).
+
+**What the window shows (Nov 24, 2026):** 6 new cases. A summary carries the goal (cut to 300 characters) and the planned tasks; a run still being planned reports `running` with its goal (it used to read as "stopped part-way", and the goal text is kept in memory for the first moments before it is saved); `orchestrator.started` is the first announcement and carries only the thread id; a run that cannot start announces `orchestrator.failed` with its reason (and a refused goal announces nothing); and the plan and each finished task are announced (`orchestrator.planned`, `orchestrator.progress`) only after they are saved, checked by reading the run at the moment of each announcement.
+
+### approval-queue
+
+Suite: `.claude/evals/suites/approval-queue.js`. No dataset. Code under test: `src/renderer/queue.mjs`: plain functions with no React and no `window`, so nothing needs mocking. The screen (`ApprovalQueue.jsx`) is thin on purpose and only draws what these return.
+
+**Cases:** 28
+
+Contract: `mergeLists(...lists)`, `applyEvent(rows, event) -> { rows, refetch }`, `cardView(row)`, `ageLabel(createdAt, now)`, `describeAnswer(result) -> { tone, text, remove }` and `answerArgs({ id, decision, note }) -> { ok, args } | { ok: false, problem }`. The full contract is in the header of the suite file.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Live events | 8 | **A card answered somewhere else (the phone) leaves the queue with no refetch**; a rejected or cancelled answer and a cancelled card leave too; "asked for more information" keeps the card and marks it; a new decision asks for exactly one fetch and changes nothing itself; the runtime becoming ready asks for a fetch, and every other event does nothing; an event for a card that is not there changes nothing; malformed events change nothing and never throw; the list it was given is never changed |
+| Merging | 4 | Waiting and "asked" cards merge oldest first with one per id; rows without an id and missing lists are tolerated; cards with the same time keep a stable order; inputs are never changed |
+| What a card shows | 8 | All seven fields, the details and the tool; a plain label per category; missing or odd fields become empty text and never throw; risk gets a tone and the level is always kept as words (never colour alone); details exist only when there is text; only a waiting card can be asked about, and each state has a label; an unknown-tool card says approving it does not run it; text is passed through as it is, never turned into markup |
+| Age | 2 | "just now", "5 minutes ago", "1 hour ago", "3 days ago"; a future or bad time gives "just now" or nothing |
+| Answers | 6 | An answer that took effect is confirmed and a final one removes the card; one that lost the race says "already approved" and the card goes; a refused or garbled reply is an error that keeps the card; the arguments hold only the id, the decision and a trimmed note; a bad id, a bad decision or a note over 2000 characters is refused before anything is sent; nothing else (`via`, `status`, `channel`) can ride along |
+
+Checked by mutation on Nov 24, 2026: 10 mistakes were introduced one at a time (a card answered elsewhere stays, a new decision does not trigger a fetch, asking for more removes the card, a duplicate card, newest first, extra keys sent to the runtime, high risk looking low, losing a race keeps the card, the unknown-tool warning dropped, an overlong note accepted). All 10 are caught.
+
+**Checked in the real window on Nov 24, 2026** (the built Electron app with its strict production CSP, against a seeded local database, driven like a user; no Telegram, no Groq): 14 of 14 checks passed with no console errors. The queue loads three cards; all seven fields show in plain words; Show details reveals the technical text and tool (and says it is expanded to assistive tech); the unknown-tool card carries its warning; Approve removes the card and the database says `approved` via the dashboard; Ask more keeps the card, marks it and stores the question; **a card answered on the phone disappears without a refresh**; a new decision appears by itself; with nothing left the screen says so; nothing overflows at the default window size. The audit log held exactly 4 list reads and 4 answers: no polling. This driver script is not in the repo (it needs a browser-driving library), so the window is not covered by `npm test`.
+
+### tool-loader
+
+Suite: `.claude/evals/suites/tool-loader.js`. No dataset. Code under test: `src/runtime/tools/index.js` (`createToolLoader`) and `src/runtime/tools/builtin.js` (the draft tool).
+
+**Cases:** 29
+
+Why it exists: step 1.10 says a tool with no policy rule must never load, and tasks need a way to hand text back to the founder (for example a script asked for through Telegram).
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Loading | 6 | Only a tool with a policy rule loads; a failing rule check refuses it; malformed and duplicate definitions are refused while good ones still load; garbage input never throws; the planner's description is a copy |
+| Running | 15 | The rule is checked again on every call; the access tag must match; arguments are checked first and a failing check never shows its text; a tool's result shrinks to plain `{ text }` (exact line breaks kept, long text cut); a tool's own error text never escapes; a hung tool is stopped; look-alike tool names do not match |
+| Draft tool | 3 | `docs.create_draft` is a routine write the policy allows, returns its title and content, and refuses missing, blank, odd or oversized arguments |
+
+Checked by mutation on Nov 24, 2026: 12 deliberate mistakes in the loader and draft tool, all caught.
+
+**Files (5 cases):** a tool may also hand back one file `{ name, content }`. The loader keeps it exactly, reduces the name to a safe plain one (no folders, no odd characters, not hidden), drops a file that is not usable or over 20,000 characters while keeping the text, allows an empty file, and the draft tool returns its script as a file named by its title (`.txt` added when there is no extension). 7 more mistakes about files were introduced and all caught.
+
+The `orchestrator` eval gained 10 cases (6 for text, 4 for files: a file is kept on its own task exactly, secrets in it are removed, a file that is not a name and text is dropped while the task still ran, and files survive a pause); the text cases: text a tool returns is kept on its own task only, secrets removed, cut to 8000 characters, odd results dropped, and it survives a pause. The `telegram-bot` eval gained 1: that text is sent exactly as written below the summary.
+
+### zip-file
+
+Suite: `.claude/evals/suites/zip-file.js`. No dataset. Code under test: `src/renderer/zip.mjs` (`makeZip(files) -> Uint8Array`), used by the Goals panel's Download button when a goal made several files.
+
+**Cases:** 9
+
+Why it exists: a zip with a wrong size field looks fine to a lenient reader but is rejected by real unzip tools. The first version of the builder had exactly that bug (the central directory size was measured after the end record had moved on), found by the case that runs the system `unzip -t` and then confirmed with Python's zipfile. The suite's own reader was then made strict (it now checks the directory size and the end record), and it was confirmed that the old bug fails 5 of the 9 cases.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Content | 5 | Every file has its exact content and a correct checksum; it starts like a zip; non-English names and text survive (UTF-8 flag set); an empty file and an empty list work; a large file and 300 files are intact |
+| Behaviour | 3 | The same input always gives the same bytes; the input is not changed; odd input gives a clear error or a valid zip, never a broken one |
+| Real tool | 1 | The system `unzip` accepts it (`-t`) and extracts the same text (skipped as a pass on a machine with no `unzip`) |
+
+**Checked in the real window on Nov 24, 2026** (the built Electron app, goals run by the real orchestrator with the real tool loader and draft tool, a scripted planner): 6 of 6 checks: the one-file goal offers `Download add_two_numbers.py`; the three-file goal offers `Download all 3 files (.zip)` and lists what is inside; clicking both saved the script exactly as written and a zip that the system `unzip` accepts and that holds three files with their own content; no console errors. This driver script is not in the repo.
+
+### filesystem-tools
+
+Suite: `.claude/evals/suites/filesystem-tools.js`. No dataset. Code under test: `src/runtime/tools/filesystem.js` (`createFilesystemTools({ root })`: `filesystem.read_file` and `filesystem.list_directory`, both read-only, both with built-in policy rules). The suite builds its own temporary folder (a project folder, a sibling folder whose name starts the same, an outside folder, and links) and removes it when it exits.
+
+**Cases:** 21
+
+Why it exists: step 1.10 says the Filesystem is "limited to the project folder", and the project folder holds `.env` with every key. An agent that can read files is only safe if the limit holds against `..`, absolute paths, look-alike sibling folders and links.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| The tools | 4 | Two read-only tools with a summary, an arguments line and a policy rule; no tools without an absolute folder (never a default of the whole disk); a folder that does not exist never falls back to another one; arguments are one plain path (extra keys, blanks, NUL and very long paths refused) |
+| Reading | 6 | A file inside is read exactly (also through `./src/../`); a link that stays inside works; long text is cut and says so; a very large file and a binary file are refused; a folder cannot be read as a file nor a file listed |
+| Staying inside | 4 | `..`, absolute paths (even one that points inside), `~`, drive letters and backslashes are refused; a sibling folder such as `root-evil` is outside; a link inside that points outside is refused for a file, through a folder and for a listing |
+| Secrets | 4 | `.env*`, `.git`, `node_modules`, `.pem`, `id_rsa`, `credentials*` are never read, in any letter case, nor through a link (`link-env.txt` to `.env`); a listing hides them and any link that leaves the folder, shows folders with a slash, sorted; a huge listing is capped at 200 and says so |
+| Errors and effects | 3 | An error never shows the folder's real path or the system's error text (no ENOENT and the like); nothing in the folder is changed by reading |
+
+Checked by mutation on Nov 24, 2026: 15 deliberate mistakes in the tools. 12 were caught outright; 3 are redundant second checks (the written-path check, the case-insensitive name check and the listing's own skip all sit behind the link-following check, so removing one changes nothing anyone could see). Two gaps in the suite that the mutations exposed (a missing folder passing by luck because the folder had no README, and nothing pinning that absolute paths are refused) were closed and re-checked.
+
+**Checked on the real project folder on Nov 24, 2026:** `package.json`, `src/runtime/policy.js`, a listing of `.` and `src` were read; `.env`, `.env.example`, `.git/config`, `node_modules/react/package.json`, `/etc/hosts`, `../../../etc/hosts` and a listing of `..` were all refused. Every refusal reaches the caller as only "The tool failed." On purpose: it says nothing about why.
+
+### tool-config
+
+Suite: `.claude/evals/suites/tool-config.js`. Code under test: `src/runtime/tools/config.js` and the shipped `config/mcp/shared.yaml`. An allow-list with a tag check that fails closed.
+
+**Cases:** 19
+
+Covers: shared plus team files, a team name cannot reach other files, a missing or broken file gives no tools, wrong entries are skipped, a tag that disagrees removes the tool, and the shipped file never lists a tool that asks the founder or has no policy rule.
+
+### fetch-tool
+
+Suite: `.claude/evals/suites/fetch-tool.js`. Code under test: `src/runtime/tools/fetch.js` (fake transport, no network).
+
+**Cases:** 17
+
+Covers: https only, no private, loopback or metadata address in any notation or through a redirect, the address check at connect time, at most 3 redirects, text only and cut, no credentials, and no system error text. Not yet run by hand against example.com and localhost.
+
+### github-tools
+
+Suite: `.claude/evals/suites/github-tools.js`. Code under test: `src/runtime/tools/github.js` (a fake network records every request). Tools: `github.read_file`, `github.list_pull_requests` (read), `github.create_pull_request` (routine write) and `github.merge_pull_request` (always asks the founder).
+
+**Cases:** 15
+
+Covers: no token or no repositories means no tools; only the repositories in `GITHUB_REPOS` (matched without regard to letter case) and nothing is sent for any other; the exact request for each tool; the token in one header to api.github.com only and redirects never followed; paths that leave the repository or name secrets are refused before any request (same name list as the Filesystem tools); folders, links, binary and very large files are not read; odd arguments refused before any request; a merge that did not happen is a failure; no token, GitHub message or system text in any error. Checked by mutation: any repository allowed, redirects followed and secret names readable were each caught. Not yet run by hand against real GitHub.
+
+### supabase-tool
+
+Suite: `.claude/evals/suites/supabase-tool.js`. Code under test: `src/runtime/tools/supabase.js` (a fake store whose insert and update throw if touched).
+
+**Cases:** 13
+
+Why it exists: the store uses the service key, which bypasses row-level security, so this tool is the only protection. Covers: only `tasks`, `projects`, `agents` and `scaling_rules` can be read (the audit log, decisions, policy table, checkpoints, memory, clients, pods and members cannot, in any spelling); select only; plain filters, a capped limit (default 20, at most 50) and a plain order; JSON rows one per line, cut to a limit; a database error never reaches the caller. Checked by mutation: all tables readable, limit not capped and the database error shown were each caught.
+
+### tool-gate
+
+Suite: `.claude/evals/suites/tool-gate.js`. The step 1.10 "done when", end to end: the real policy, loader, Filesystem tools (on a temporary folder with a secret outside it and a `.env` inside it), GitHub tools (fake network) and orchestrator graph; only the decisions store, planner and card writer are scripted.
+
+**Cases:** 9
+
+Covers: a file inside the folder is read with no decision; a file outside (relative and absolute) and `.env` are refused and their text appears nowhere (result, audit, events); a routine write (opening a pull request) runs without a decision; a merge pauses with a launch-or-pricing decision and sends nothing to GitHub before it; approving it sends exactly one request and the run finishes; rejecting it sends nothing and the run continues; an approved merge still cannot run if the team's tools do not include it or the repository was not named. Checked by mutation: making the merge routine in the policy was caught.
+
+### shared-skills
+
+Suite: `.claude/evals/suites/shared-skills.js`. Checks `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` so the prose cannot drift from the code it describes.
+
+**Cases:** 9
+
+Covers: name matches folder, a description, a link to the charter and a length limit; no key-like text; the approval skill lists the seven parts in order with the money, time, "Show details" and "Price not known yet" rules, its good example card PASSES the real card checker and its bad example FAILS it; the escalation skill names every tool the policy always asks about, the four kinds of decision, the preview-deploy rule and "the policy check decides, treat doubt as crucial"; the handoff skill has its five headings and forbids secrets. Checked by mutation: a missing tool name, a changed example and a renamed heading were each caught.
+
+### goals-view
+
+Suite: `.claude/evals/suites/goals-view.js`. No dataset. Code under test: `src/renderer/goals.mjs`: plain functions with no React and no `window`. The Goals panel (`GoalsPanel.jsx`) only draws what they return.
+
+**Cases:** 27
+
+Why it exists: a goal sent from the phone used to be invisible in the window (only decision cards were shown), so there was no sign it was being planned, had finished, or had failed. Contract: `goalView(summary)` and `shouldRefetch(event)`; a summary is one entry of the runtime's `goals.list`.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Status | 8 | A goal being planned says so and is active; one waiting on a card points to the queue; a finished goal says finished; a finished goal with blocked or failed tasks says "Finished, but N tasks did not go ahead" and is never plain "Finished" (a task you rejected does not count); a goal that could not start shows the runtime's own plain message; every failure reason has a plain explanation even without a message; a run that stopped part-way says so and warns an action may have happened; a goal that cannot be found says so |
+| Tasks | 5 | Done tasks, the waiting one and those still to come; the task being worked on; every outcome has a label and a tone (the wording is always there, never colour alone) and an unknown outcome is not blank; an approved task for an unknown tool says it did not run; results are matched to tasks by id, not by position |
+| Text and odd input | 4 | A goal with no text yet gets a placeholder; text is passed through, never turned into markup; odd input never throws and always gives text; the summary is never changed |
+| Refreshing | 2 | A new run, a pause, a finish, a failure and the runtime becoming ready refresh the list; unrelated and malformed events do not and never throw |
+
+**Downloads (8 cases):** a goal with no files has no download; one file is downloaded as itself with its exact content; several files are one `.zip` named after the goal; only files of tasks that actually ran are offered; two files with the same name both survive (`script.py`, `script (2).py`); odd or unsafe entries are never offered and never throw; a name with a path is reduced to a plain name; a goal still working offers the files made so far. 4 more mistakes were introduced and caught.
+
+Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (a failed task reported as plain "Finished", a blocked task not counted, results matched by position, the runtime's message ignored, a part-way stop looking like a normal failure, a decision event refreshing the list, a start event not refreshing, a running goal not marked active). All 8 are caught (the first run missed one: a test used a message identical to the fallback wording, so it was made to differ).
+
+**Checked in the real window on Nov 24, 2026** (the built Electron app, a seeded local database, goals made by the real orchestrator code): 10 of 10 checks passed with no console errors: the five newest goals show first; a goal waiting on a decision shows its done task and its waiting task; a goal that finished with a blocked task says so honestly; a goal that failed at planning is still shown with its reason; older goals sit behind a button; and a goal made while the window was open appeared by itself, newest first, with the announcements batched into one read. This driver script is not in the repo, so the window is not covered by `npm test`.
 
 ### orchestrator-model
 
@@ -260,7 +422,7 @@ Checked live on Nov 24, 2026 (local stand-in database, Claude Code provider, no 
 
 Suite: `.claude/evals/suites/orchestrator-service.js`. No dataset. Code under test: `src/runtime/orchestrator/service.js`. It runs against the REAL audit log and checkpoint store on a real Postgres with the real migrations (`scripts/fake-supabase.js`), one fresh database per case; the decisions service is a small fake and the policy is the real one.
 
-**Cases:** 16
+**Cases:** 25
 
 Contract: `createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError? })` returns `submitGoal`, `status`, `start()` and `stop()`. A run that files a card writes an `orchestrator.waiting` audit entry (target = the decision, detail = the run's thread id); that is how an answer finds its run again, with no new table.
 
@@ -273,6 +435,8 @@ Contract: `createOrchestratorService({ store, rawAudit, decisions, policy, runti
 | Passing through | 2 | A bad goal or a failed plan comes back as a failure with no error text; the audit log holds only ids, never the goal or the card |
 
 Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (answers ignored, recovery that does nothing, no unsubscribe on stop, subscribing on every start, a fast answer not applied after pausing, the link entry losing its target, an unchecked id looked up, the goal written into the audit entry). 7 are caught; the eighth is an equivalent change, because the runtime keeps listeners in a set and adding the same function twice changes nothing.
+
+**The window's list of goals (Nov 24, 2026):** 9 new cases. Submitting a goal first records an `orchestrator.goal_submitted` audit entry holding only the thread id (never the goal), and if that cannot be recorded nothing is planned; a refused goal leaves no entry; `listGoals` returns recent goals newest first with the goal, status and tasks; a goal still being planned is listed as running with its text; a goal that failed at planning is still listed with its reason; the list shows the final state after you answer; the limit is honoured and capped at 50; and a run that cannot be read is listed as failed while the others still appear.
 
 ### database-schema
 
@@ -299,7 +463,7 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were each introduced i
 
 Suite: `.claude/evals/suites/runtime-core.js`. No dataset; each case is a check function with an in-memory fake store that records every call. Code under test: `src/runtime/config.js`, `audit.js`, `runtime.js`, `commands.js` and `src/ipc-guard.js`.
 
-**Cases:** 26
+**Cases:** 30
 
 Contract: the full contract (function signatures, error codes, the store interface) is in the header of the suite file. Nothing here touches Electron, the network or a real database, so it runs in milliseconds. The Electron wiring (`src/main.js`, `src/ipc.js`, `src/preload.js`) is covered by the `invariants` checks, and by launching the real app (see PLAN.md step 1.2).
 
@@ -312,6 +476,8 @@ Contract: the full contract (function signatures, error codes, the store interfa
 | IPC guard | 2 | Only the app's own page (the built `index.html`, or the dev server's exact origin in dev only) is trusted; payloads must be a plain command name with plain-object arguments |
 
 Checked by mutation on Nov 21, 2026: 8 realistic mistakes were introduced into the runtime one at a time (audit failure no longer blocking, internal errors leaking, redaction off, any file URL trusted, argument checks removed, status audited, a stopped runtime still accepting commands, the dev server trusted in production). All 8 were caught.
+
+**`goals.list` (Nov 24, 2026):** the window gets one more read-only command, so the exact-command-list case is now `the-runtime-registers-exactly-the-planned-commands` and lists five. 4 new cases: it returns the orchestrator's goals and limits the size (1 to 50, default 20); with no orchestrator it says "not available"; a failing orchestrator gives a generic error that carries none of its text; and it is audited like any other command.
 
 ### decisions-service
 

@@ -1,0 +1,25 @@
+# Tools every team may use (PLAN.md step 1.10). Read by src/runtime/tools/config.js and graded by the
+# `tool-config` eval.
+#
+# Each line is  tool name: read | write  and must match the tag the tool declares itself. A tool that is not
+# listed here is never loaded. Listing a tool does NOT make it allowed: the policy check (src/runtime/policy.js)
+# still decides, and a tool that always asks the founder (spend, hiring, launches, legal) is never listed here.
+# A team adds its own tools in config/mcp/<team>.yaml, with the same format.
+tools:
+  # Notes, drafts and scripts that come back to the founder as text and a download.
+  docs.create_draft: write
+
+  # Reading the project folder only. Secrets and anything outside it are refused.
+  filesystem.read_file: read
+  filesystem.list_directory: read
+
+  # Reading a public web page.
+  fetch.get: read
+
+  # Reading a few non-sensitive tables of the company database.
+  supabase.select: read
+
+  # GitHub, for the repositories named in GITHUB_REPOS only. Opening a pull request ships nothing.
+  github.read_file: read
+  github.list_pull_requests: read
+  github.create_pull_request: write

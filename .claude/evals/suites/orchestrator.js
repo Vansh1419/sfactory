@@ -126,6 +126,7 @@ function parts(over = {}) {
       emit: (type, data) => {
         if (over.emitThrows) throw new Error('a listener broke');
         calls.events.push([type, data]);
+        over.onEvent?.(type, data);
       },
     },
   };
@@ -618,6 +619,192 @@ const cases = [
       const paused = await h.orch.start({ goal: GOAL, threadId: t });
       const entry = h.calls.audit.find((e) => e.action === 'orchestrator.waiting');
       return verdict(entry && entry.threadId === t && entry.decisionId === paused.waitingFor, json(entry));
+    },
+  },
+
+  // ---- What the window shows: the goal, the tasks, "running", and announcements --------------------
+  {
+    id: 'a-summary-carries-the-goal-and-the-planned-tasks',
+    async check() {
+      const h = build({ tasks: [routine('Before'), spend('Buy it'), routine('After')] });
+      const res = await h.orch.start({ goal: `  ${GOAL}  `, threadId: thread('summary') });
+      const ok = res.goal === GOAL && json(res.tasks.map((t) => [t.taskId, t.title])) === json([['t1', 'Before'], ['t2', 'Buy it'], ['t3', 'After']]);
+      return verdict(ok, json({ goal: res.goal, tasks: res.tasks }));
+    },
+  },
+  {
+    id: 'a-very-long-goal-is-cut-in-the-summary',
+    async check() {
+      const h = build({ tasks: [routine('Draft')] });
+      const long = `Launch ${'the landing page '.repeat(110)}`.slice(0, 1900);
+      const res = await h.orch.start({ goal: long, threadId: thread('long-goal') });
+      return verdict(typeof res.goal === 'string' && res.goal.length > 0 && res.goal.length <= 300, `length ${res.goal && res.goal.length}`);
+    },
+  },
+  {
+    id: 'a-run-that-is-still-being-planned-reports-running-with-its-goal',
+    async check() {
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const h = build({ planner: async () => { await gate; return [spend('Buy it')]; } });
+      const t = thread('running');
+      const starting = h.orch.start({ goal: GOAL, threadId: t });
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      const during = await h.orch.status({ threadId: t });
+      release();
+      const after = await starting;
+      const ok = during.status === 'running' && during.goal === GOAL && Array.isArray(during.tasks) && during.tasks.length === 0 && after.status === 'waiting';
+      return verdict(ok, json({ during: [during.status, during.goal, during.tasks], after: after.status }));
+    },
+  },
+  {
+    id: 'start-announces-started-first-with-only-the-thread-id',
+    async check() {
+      const h = build({ tasks: [spend('Buy it')] });
+      const t = thread('announce');
+      await h.orch.start({ goal: 'SECRET GOAL TEXT about the launch', threadId: t });
+      const first = h.calls.events[0];
+      return verdict(first && first[0] === 'orchestrator.started' && json(first[1]) === json({ threadId: t }) && !json(h.calls.events).includes('SECRET GOAL TEXT'), json(h.calls.events));
+    },
+  },
+  {
+    id: 'the-plan-and-each-finished-task-are-announced-only-after-they-are-saved',
+    async check() {
+      let orch;
+      const reads = [];
+      const t = thread('progress');
+      const h = build({
+        tasks: [routine('One'), routine('Two')],
+        // On every announcement, read what the window would read, at that very moment.
+        onEvent: (type) => { if (type === 'orchestrator.planned' || type === 'orchestrator.progress') reads.push(orch.status({ threadId: t }).then((s) => [type, s.tasks.length, s.results.length])); },
+      });
+      orch = h.orch;
+      await h.orch.start({ goal: GOAL, threadId: t });
+      const seen = await Promise.all(reads);
+      const types = h.calls.events.map((e) => e[0]);
+      const ok = json(types) === json(['orchestrator.started', 'orchestrator.planned', 'orchestrator.progress', 'orchestrator.progress', 'orchestrator.finished']) && json(seen) === json([['orchestrator.planned', 2, 0], ['orchestrator.progress', 2, 1], ['orchestrator.progress', 2, 2]]);
+      return verdict(ok, json({ types, seen }));
+    },
+  },
+  {
+    id: 'a-run-that-cannot-start-announces-failed-with-its-reason-and-a-bad-goal-announces-nothing',
+    async check() {
+      const broken = build({ planner: async () => { throw new Error(`model down ${SECRET}`); } });
+      const t = thread('announce-failed');
+      await broken.orch.start({ goal: GOAL, threadId: t });
+      const failed = broken.calls.events.find((e) => e[0] === 'orchestrator.failed');
+      const blank = build();
+      await blank.orch.start({ goal: '   ' });
+      const ok = failed && json(failed[1]) === json({ threadId: t, reason: 'planner_failed' }) && !json(broken.calls.events).includes(SECRET) && blank.calls.events.length === 0;
+      return verdict(ok, json({ failed, blankEvents: blank.calls.events }));
+    },
+  },
+
+  // ---- A task can hand text back (step 1.10) --------------------------------------------------------
+  {
+    id: 'the-text-a-tool-returns-is-kept-on-its-task-and-nowhere-else',
+    async check() {
+      const code = 'def add(a, b):\n    return a + b\n';
+      const h = build({ tasks: [routine('Write the script')], toolOutput: { text: code, ok: true } });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('text') });
+      const everywhereElse = json({ log: res.log, events: h.calls.events, audit: h.calls.audit });
+      return verdict(res.results[0].output === code && !everywhereElse.includes('def add'), json({ output: res.results[0].output, leaked: everywhereElse.includes('def add') }));
+    },
+  },
+  {
+    id: 'secrets-in-a-tools-text-are-removed-before-it-is-kept',
+    async check() {
+      const h = build({ tasks: [routine('Write the note')], toolOutput: { text: `Use this key ${SECRET} to connect` } });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('text-secret') });
+      return verdict(!json(res).includes(SECRET) && /\[redacted\]/.test(res.results[0].output ?? ''), json(res.results));
+    },
+  },
+  {
+    id: 'very-long-text-is-cut-to-a-limit',
+    async check() {
+      const h = build({ tasks: [routine('Write a lot')], toolOutput: { text: `START${'x'.repeat(50_000)}` } });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('text-long') });
+      const output = res.results[0].output ?? '';
+      return verdict(output.startsWith('START') && output.length > 1000 && output.length <= 8001, `length ${output.length}`);
+    },
+  },
+  {
+    id: 'only-a-string-text-is-kept-and-everything-else-a-tool-returns-is-dropped',
+    async check() {
+      const results = [{ text: 5 }, { text: { a: 1 } }, { text: ['x'] }, { text: '   ' }, { output: 'x', result: 'y' }, 'a bare string', null, undefined, { ok: true }];
+      for (const toolOutput of results) {
+        const h = build({ tasks: [routine('Task')], toolOutput });
+        const res = await h.orch.start({ goal: GOAL, threadId: thread('text-odd') });
+        if ('output' in res.results[0] || res.status !== 'done' || res.results[0].outcome !== 'ran') return verdict(false, `kept something for ${json(toolOutput)}: ${json(res.results[0])}`);
+      }
+      return verdict(true);
+    },
+  },
+  {
+    id: 'only-a-task-that-ran-has-text',
+    async check() {
+      const h = build({ tasks: [routine('Fails'), spend('Rejected'), routine('Fine')], toolOutput: { text: 'some text' }, runFails: ['docs.create_draft'] });
+      const t = thread('text-only-ran');
+      const paused = await h.orch.start({ goal: GOAL, threadId: t });
+      h.decisions.answer(paused.waitingFor, 'rejected');
+      const res = await h.orch.resume({ threadId: t });
+      // The first and third tasks use the same (failing) tool, so only the rejected one and the failures are present.
+      return verdict(res.results.every((r) => !('output' in r)) && json(res.results.map((r) => r.outcome)) === json(['failed', 'rejected', 'failed']), json(res.results));
+    },
+  },
+  {
+    id: 'text-survives-a-pause-and-the-resume',
+    async check() {
+      const h = build({ tasks: [routine('Write the note'), spend('Buy it'), routine('Write the summary')], toolOutput: { text: 'the text' } });
+      const t = thread('text-resume');
+      const paused = await h.orch.start({ goal: GOAL, threadId: t });
+      const before = paused.results[0].output;
+      h.decisions.answer(paused.waitingFor, 'approved');
+      const res = await h.orch.resume({ threadId: t });
+      return verdict(before === 'the text' && res.results.filter((r) => r.output === 'the text').length === 3, json(res.results.map((r) => [r.outcome, r.output])));
+    },
+  },
+
+  // ---- A task can hand back a file (for the window's download button) ---------------------------------
+  {
+    id: 'a-file-a-tool-returns-is-kept-on-its-task-exactly',
+    async check() {
+      const content = 'def add(a, b):\n    return a + b\n';
+      const h = build({ tasks: [routine('Write the script')], toolOutput: { text: 'x', file: { name: 'add.py', content, extra: 'dropped' } } });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('file') });
+      return verdict(json(res.results[0].file) === json({ name: 'add.py', content }) && !json({ events: h.calls.events, audit: h.calls.audit }).includes('def add'), json(res.results[0]));
+    },
+  },
+  {
+    id: 'secrets-in-a-file-are-removed-before-it-is-kept',
+    async check() {
+      const h = build({ tasks: [routine('Write the config')], toolOutput: { file: { name: 'config.txt', content: `key = ${SECRET}\n` } } });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('file-secret') });
+      return verdict(!json(res).includes(SECRET) && /\[redacted\]/.test(res.results[0].file?.content ?? ''), json(res.results));
+    },
+  },
+  {
+    id: 'a-file-that-is-not-a-name-and-text-is-dropped-and-the-task-still-ran',
+    async check() {
+      const bad = [null, 'x', 5, [], {}, { name: 'a.py' }, { name: 5, content: 'x' }, { name: 'a.py', content: 5 }, { name: '', content: 'x' }, { name: 'a.py', content: 'x'.repeat(20_001) }];
+      for (const file of bad) {
+        const h = build({ tasks: [routine('Task')], toolOutput: { file } });
+        const res = await h.orch.start({ goal: GOAL, threadId: thread('file-odd') });
+        if ('file' in res.results[0] || res.results[0].outcome !== 'ran') return verdict(false, `kept ${json(file)}: ${json(res.results[0])}`);
+      }
+      return verdict(true);
+    },
+  },
+  {
+    id: 'files-survive-a-pause-and-each-task-keeps-its-own',
+    async check() {
+      const h = build({ tasks: [routine('First'), spend('Buy'), routine('Second')], toolOutput: { file: { name: 'f.txt', content: 'one' } } });
+      const t = thread('file-resume');
+      const paused = await h.orch.start({ goal: GOAL, threadId: t });
+      const before = paused.results[0].file && paused.results[0].file.content;
+      h.decisions.answer(paused.waitingFor, 'approved');
+      const res = await h.orch.resume({ threadId: t });
+      return verdict(before === 'one' && res.results.filter((r) => r.file && r.file.name === 'f.txt').length === 3, json(res.results.map((r) => [r.outcome, r.file && r.file.name])));
     },
   },
 

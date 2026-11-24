@@ -316,6 +316,23 @@ test('the writer instructions name every field, every risk level and every jargo
   assert.ok(text.includes('IST') && text.includes('₹') && text.includes('$'));
 });
 
+test('the writer instructions teach the exact wording for an unknown price, and that wording passes', () => {
+  const text = writerInstructions();
+  assert.ok(text.includes('Price not known yet'), 'the wording is not taught');
+  assert.match(text, /never guess/i);
+  assert.match(text, /Medium or High/);
+  // The very words the instructions teach must be accepted, and with a Medium risk.
+  const taught = card({ cost: 'Price not known yet', risk: { level: 'Medium', reason: 'Money is spent and the price is not known.' } });
+  assert.equal(checkCard(taught).pass, true);
+});
+
+test('an unknown price with Low risk is told to use Medium or High', () => {
+  const result = checkCard(card({ cost: 'Price not known yet', risk: { level: 'Low', reason: 'It is small.' } }));
+  assert.equal(result.pass, false);
+  assert.deepEqual(result.problems, ['unknown_cost_low_risk']);
+  assert.match(result.findings[0].message, /Medium or High/);
+});
+
 test('the example card in the writer instructions passes the checker', () => {
   assert.equal(checkCard(card()).pass, true);
   assert.ok(writerInstructions().includes('The new login page for Client A is ready.'));

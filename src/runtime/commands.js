@@ -13,6 +13,8 @@ const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 
 const RESOLUTIONS = ['approved', 'rejected', 'info_requested'];
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_GOALS = 20;
+const MAX_GOALS = 50;
 
 /** Returns a problem description, or null when `args` only has allowed keys. */
 const unknownKey = (args, allowed) => {
@@ -31,7 +33,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -86,6 +88,22 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null 
         if (err instanceof DecisionError) throw new CommandError(err.code, err.message);
         throw err;
       }
+    },
+  });
+
+  // The founder's recent goals and where each one stands, for the window's Goals panel. Read only.
+  runtime.register('goals.list', {
+    validate(args) {
+      const extra = unknownKey(args, ['limit']);
+      if (extra) return extra;
+      if (args.limit !== undefined && !(Number.isInteger(args.limit) && args.limit >= 1 && args.limit <= MAX_GOALS)) {
+        return `limit must be a whole number from 1 to ${MAX_GOALS}`;
+      }
+      return null;
+    },
+    handler: async (args) => {
+      if (!orchestrator) throw new CommandError('not_available', 'Goals are not available right now.');
+      return { goals: await orchestrator.listGoals({ limit: args.limit ?? DEFAULT_GOALS }) };
     },
   });
 

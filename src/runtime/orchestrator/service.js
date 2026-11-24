@@ -11,11 +11,14 @@
 //   - On start, recent waiting runs are resumed too, to catch cards answered while the app was closed.
 //   - After a run first pauses it is checked once more, so a very fast tap is not lost.
 
-const { createOrchestrator } = require('./graph');
+const crypto = require('node:crypto');
+const { createOrchestrator, MAX_GOAL_CHARS } = require('./graph');
 const { createSupabaseSaver } = require('./checkpointer');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RECOVERY_ENTRIES = 100;
+const DEFAULT_GOALS = 20;
+const MAX_GOALS = 50;
 
 function createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError = () => {} }) {
   const orchestrator = createOrchestrator({
@@ -63,10 +66,37 @@ function createOrchestratorService({ store, rawAudit, decisions, policy, runtime
     }
   }
 
-  /** Start a run. If it paused, check once more whether its card was already answered. */
+  /**
+   * Start a run. If it paused, check once more whether its card was already answered.
+   * The submission is recorded FIRST (the thread id only, never the goal), so the window can list every goal,
+   * including one that fails at planning and leaves nothing else behind. If it cannot be recorded, nothing starts.
+   */
   async function submitGoal(request) {
-    const result = await orchestrator.start(request);
+    const goal = request?.goal;
+    // A goal that would be refused is refused by the orchestrator itself, with nothing recorded.
+    if (typeof goal !== 'string' || goal.trim() === '' || goal.length > MAX_GOAL_CHARS) return orchestrator.start(request);
+
+    const threadId = crypto.randomUUID();
+    try {
+      await rawAudit.append({ actorType: 'founder', action: 'orchestrator.goal_submitted', detail: { threadId } });
+    } catch {
+      return { threadId: null, status: 'failed', waitingFor: null, reason: 'audit_failed', message: 'The goal could not be recorded, so nothing was started.', goal: '', tasks: [], results: [], log: [] };
+    }
+    const result = await orchestrator.start({ goal, threadId });
     return result.status === 'waiting' ? orchestrator.resume({ threadId: result.threadId }) : result;
+  }
+
+  /** The founder's recent goals, newest first, each with where it stands. A run that cannot be read is listed as failed. */
+  async function listGoals({ limit = DEFAULT_GOALS } = {}) {
+    const wanted = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_GOALS) : DEFAULT_GOALS;
+    const entries = await store.select('audit_log', { where: { action: 'orchestrator.goal_submitted' }, order: 'id.desc', limit: wanted });
+    const goals = [];
+    for (const entry of entries) {
+      const threadId = entry?.detail?.threadId;
+      if (typeof threadId !== 'string') continue;
+      goals.push({ ...(await orchestrator.status({ threadId })), submittedAt: typeof entry.at === 'string' ? entry.at : null });
+    }
+    return goals;
   }
 
   let unsubscribe = null;
@@ -74,6 +104,7 @@ function createOrchestratorService({ store, rawAudit, decisions, policy, runtime
   return {
     orchestrator,
     submitGoal,
+    listGoals,
     status: orchestrator.status,
 
     /** Listen for answers, then recover. Calling it again does nothing. */

@@ -629,6 +629,38 @@ const cases = [
     },
   },
   {
+    id: 'a-finished-run-with-blocked-or-failed-tasks-says-how-many-did-not-go-ahead',
+    async check() {
+      const outcomes = (...kinds) => kinds.map((outcome, i) => ({ taskId: `t${i + 1}`, title: `Task ${i + 1}`, outcome }));
+      const sayFor = async (results, log) => {
+        const o = controllableOrchestrator();
+        const h = harness({ orchestrator: o });
+        await h.bot.handleUpdate(text(FOUNDER, '/goal Plan the launch'));
+        o.finish(0, { threadId: 't', status: 'done', waitingFor: null, results, log });
+        await tick();
+        return h.sent[h.sent.length - 1].text;
+      };
+      const one = await sayFor(outcomes('ran', 'blocked_card'), ['Task 2: no usable card could be written, so it did not run']);
+      const two = await sayFor(outcomes('failed', 'blocked_unknown_tool', 'ran'), ['x']);
+      const fine = await sayFor(outcomes('ran', 'rejected'), ['Task 1: done']);
+      const ok = /Finished, but 1 task did not go ahead/i.test(one) && one.includes('no usable card could be written') && /Finished, but 2 tasks did not go ahead/i.test(two) && /^Finished\./.test(fine) && !/did not go ahead/i.test(fine);
+      return verdict(ok, json({ one: one.slice(0, 80), two: two.slice(0, 80), fine: fine.slice(0, 40) }));
+    },
+  },
+  {
+    id: 'text-a-task-produced-is-sent-exactly-as-written-below-the-summary',
+    async check() {
+      const code = 'def add(a, b):\n    return a + b\n';
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Write a script that adds two numbers'));
+      o.finish(0, { threadId: 't', status: 'done', waitingFor: null, results: [{ taskId: 't1', title: 'Write the script', outcome: 'ran', output: code }], log: ['Planned 1 task.'] });
+      await tick();
+      const t = h.sent[h.sent.length - 1].text;
+      return verdict(t.includes(code) && t.indexOf('Finished') < t.indexOf('def add') && t.length <= 4096, t);
+    },
+  },
+  {
     id: 'a-run-that-could-not-start-shows-its-plain-message',
     async check() {
       const o = controllableOrchestrator();

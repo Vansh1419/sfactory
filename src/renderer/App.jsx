@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import ApprovalQueue from './ApprovalQueue.jsx';
+import GoalsPanel from './GoalsPanel.jsx';
 
 // The renderer is sandboxed: it only sees what src/preload.js exposes on `window`.
 
@@ -14,18 +16,11 @@ const DATABASE_MESSAGES = {
 export default function App() {
   const { node, chrome, electron } = window.versions;
   const [status, setStatus] = useState(null);
-  const [waiting, setWaiting] = useState(null);
 
+  // The waiting cards belong to <ApprovalQueue>, which keeps itself live from events. This panel only
+  // reads the runtime's status (which is not audited, so it can refresh freely).
   const refresh = useCallback(async () => {
-    const s = await window.api.runtime.status();
-    setStatus(s);
-    if (s.ok && s.data.ready) {
-      // Reading the queue is recorded in the audit log like any other action.
-      const d = await window.api.decisions.list({});
-      setWaiting(d.ok ? { count: d.data.decisions.length } : { problem: d.error.message });
-    } else {
-      setWaiting(null);
-    }
+    setStatus(await window.api.runtime.status());
   }, []);
 
   useEffect(() => {
@@ -39,7 +34,7 @@ export default function App() {
   const database = status?.ok ? DATABASE_MESSAGES[status.data.database] ?? status.data.database : null;
 
   return (
-    <main className="p-8">
+    <main className="mx-auto max-w-3xl p-8">
       <h1 className="text-3xl font-semibold text-slate-900">sfactory</h1>
       <p id="info" className="mt-2 text-sm text-slate-600">
         {`Electron ${electron} · Chromium ${chrome} · Node ${node}`}
@@ -55,17 +50,13 @@ export default function App() {
             <dd className={ready ? 'text-green-700' : 'text-red-700'}>{ready ? 'Ready' : 'Not ready'}</dd>
             <dt className="text-slate-500">Database</dt>
             <dd className="text-slate-900">{database}</dd>
-            {waiting?.count !== undefined && (
-              <>
-                <dt className="text-slate-500">Waiting for you</dt>
-                <dd className="text-slate-900">{waiting.count === 0 ? 'Nothing' : `${waiting.count} decision${waiting.count === 1 ? '' : 's'}`}</dd>
-              </>
-            )}
           </dl>
         )}
         {status?.ok && status.data.problem && <p className="mt-3 text-sm text-red-700">{status.data.problem}</p>}
-        {waiting?.problem && <p className="mt-3 text-sm text-red-700">{waiting.problem}</p>}
       </section>
+
+      <GoalsPanel ready={Boolean(ready)} />
+      <ApprovalQueue ready={Boolean(ready)} />
     </main>
   );
 }

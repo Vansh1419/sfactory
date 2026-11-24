@@ -64,8 +64,11 @@ const RULES = new Map([
   // Routine work: reading, internal drafts and records, pull requests (opening
   // one ships nothing), preview deploys.
   ['filesystem.read_file', { access: 'read' }],
+  ['filesystem.list_directory', { access: 'read' }],
   ['fetch.get', { access: 'read' }],
   ['supabase.select', { access: 'read' }],
+  ['github.read_file', { access: 'read' }],
+  ['github.list_pull_requests', { access: 'read' }],
   ['github.create_pull_request', { access: 'write' }],
   ['zoho_books.create_bookkeeping_entry', { access: 'write' }],
   ['hubspot.update_lead_stage', { access: 'write' }],

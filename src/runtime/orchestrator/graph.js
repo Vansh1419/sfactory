@@ -26,12 +26,16 @@
 //     titles and outcomes.
 
 const crypto = require('node:crypto');
+const { redactDetail } = require('../audit');
+const { cleanFile } = require('../tools/files');
 const { StateGraph, Annotation, interrupt, Command, START, END } = require('@langchain/langgraph');
 
 const MAX_GOAL_CHARS = 2000;
 const MAX_TASKS = 20;
 const MAX_TEXT_CHARS = 200;
 const MAX_ARGS_CHARS = 10_000;
+const MAX_GOAL_SUMMARY_CHARS = 300;
+const MAX_OUTPUT_CHARS = 8000; // how much of a goal the window is shown
 const ACCESS_TAGS = ['read', 'write'];
 const FINAL_ANSWERS = ['approved', 'rejected', 'cancelled'];
 const RECURSION_LIMIT = 400; // LangGraph's default of 25 steps is far too few for 20 tasks
@@ -121,8 +125,8 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
       // Nothing to do: the step's own result is what matters, and it is already recorded.
     }
   };
-  const outcome = (task, kind) => ({
-    results: [{ taskId: task.id, title: task.title, outcome: kind }],
+  const outcome = (task, kind, kept = {}) => ({
+    results: [{ taskId: task.id, title: task.title, outcome: kind, ...kept }],
     log: [`${task.title}: ${OUTCOME_LOG[kind]}`],
     next: 'advance',
   });
@@ -212,15 +216,31 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     } catch {
       return outcome(task, 'blocked_audit');
     }
+    let result;
     try {
-      await runTool({ action: task.action, key: `${threadId}:${task.id}` });
+      result = await runTool({ action: task.action, key: `${threadId}:${task.id}` });
     } catch {
       return outcome(task, 'failed');
     }
-    return outcome(task, 'ran');
+    // Only plain text and one clean file are kept (secrets removed, text cut to a limit); they live on the task's result and nowhere else.
+    const kept = {};
+    if (typeof result?.text === 'string' && result.text.trim() !== '') kept.output = redactDetail(result.text).slice(0, MAX_OUTPUT_CHARS);
+    const file = cleanFile(result?.file);
+    if (file) kept.file = redactDetail(file);
+    return outcome(task, 'ran', kept);
   }
 
-  const advance = (state) => ({ index: state.index + 1, verdict: null, decisionId: null, answer: null, next: null });
+  // The plan is announced from its own step, so it is already saved when the window reads it.
+  function planned(_state, config) {
+    emitSafely('orchestrator.planned', { threadId: threadOf(config) });
+    return {};
+  }
+
+  // A finished task is announced as the run moves on: the step before this one saved its outcome.
+  function advance(state, config) {
+    emitSafely('orchestrator.progress', { threadId: threadOf(config) });
+    return { index: state.index + 1, verdict: null, decisionId: null, answer: null, next: null };
+  }
 
   function finish(_state, config) {
     emitSafely('orchestrator.finished', { threadId: threadOf(config), status: 'done' });
@@ -229,6 +249,7 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
 
   const graph = new StateGraph(State)
     .addNode('plan', plan)
+    .addNode('planned', planned)
     .addNode('pick', () => ({}))
     .addNode('check', check)
     .addNode('file', file)
@@ -238,7 +259,8 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     .addNode('advance', advance)
     .addNode('finish', finish)
     .addEdge(START, 'plan')
-    .addConditionalEdges('plan', (s) => (s.failure ? END : 'pick'))
+    .addConditionalEdges('plan', (s) => (s.failure ? END : 'planned'))
+    .addEdge('planned', 'pick')
     .addConditionalEdges('pick', (s) => (s.index >= s.tasks.length ? 'finish' : 'check'))
     .addConditionalEdges('check', (s) => s.next)
     .addConditionalEdges('file', (s) => s.next)
@@ -257,22 +279,44 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
 
   const failed = (reason, threadId = null) => ({ threadId, status: 'failed', waitingFor: null, reason, message: MESSAGES[reason], results: [], log: [] });
 
-  function summarize(threadId, snapshot) {
+  /** What the window shows about a run besides its status: the goal (cut short) and the planned tasks. */
+  const aboutRun = (values) => ({
+    goal: typeof values.goal === 'string' ? values.goal.slice(0, MAX_GOAL_SUMMARY_CHARS) : '',
+    tasks: Array.isArray(values.tasks) ? values.tasks.map((t) => ({ taskId: t.id, title: t.title })) : [],
+  });
+
+  /**
+   * `settled` is for the summary a start or a resume computes at the END of its own work: that call is
+   * still in the in-flight sets at that moment, and must not mistake itself for a run in progress.
+   */
+  function summarize(threadId, snapshot, { settled = false } = {}) {
     const values = snapshot?.values ?? {};
-    if (Object.keys(values).length === 0) return { threadId, status: 'unknown', waitingFor: null, results: [], log: [] };
+    const about = aboutRun(values);
     const kept = { results: values.results ?? [], log: values.log ?? [] };
-    if (values.failure) return { ...failed(values.failure.reason, threadId), ...kept };
+    // A run being started or resumed right now is RUNNING, not "stopped part-way". Its goal may not be saved
+    // yet in the first moments, so the copy kept in memory fills the gap.
+    if (!settled && (starting.has(threadId) || resuming.has(threadId))) {
+      return { threadId, status: 'running', waitingFor: null, ...about, goal: about.goal || (starting.get(threadId) ?? ''), ...kept };
+    }
+    if (Object.keys(values).length === 0) return { threadId, status: 'unknown', waitingFor: null, goal: '', tasks: [], results: [], log: [] };
+    if (values.failure) return { ...failed(values.failure.reason, threadId), ...about, ...kept };
 
     if ((snapshot.next ?? []).length > 0) {
       // Waiting means PAUSED ON A CARD. A run that stopped any other way (a crash between steps) is
       // never continued: continuing would run the interrupted step again, and a tool that already ran
       // would run twice.
       const paused = (snapshot.tasks ?? []).some((t) => (t.interrupts ?? []).length > 0);
-      if (!paused || !values.decisionId) return { ...failed('interrupted', threadId), ...kept };
-      return { threadId, status: 'waiting', waitingFor: values.decisionId, ...kept };
+      if (!paused || !values.decisionId) return { ...failed('interrupted', threadId), ...about, ...kept };
+      return { threadId, status: 'waiting', waitingFor: values.decisionId, ...about, ...kept };
     }
-    return { threadId, status: 'done', waitingFor: null, ...kept };
+    return { threadId, status: 'done', waitingFor: null, ...about, ...kept };
   }
+
+  /** Tell the window a run could not go on. Ids and a reason code only, never the goal. */
+  const announceIfFailed = (result) => {
+    if (result.status === 'failed' && result.threadId) emitSafely('orchestrator.failed', { threadId: result.threadId, reason: result.reason });
+    return result;
+  };
 
   const snapshotOf = (threadId) => graph.getState(configFor(threadId));
 
@@ -282,24 +326,27 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     const threadId = typeof request.threadId === 'string' && request.threadId !== '' ? request.threadId : newThreadId();
     // Reserve the id before looking at the database: two starts at once would both see an empty thread.
     if (starting.has(threadId)) return failed('already_exists', threadId);
-    starting.add(threadId);
+    starting.set(threadId, goal.trim().slice(0, MAX_GOAL_SUMMARY_CHARS)); // so the window can show it before it is saved
     try {
       if (Object.keys((await snapshotOf(threadId)).values ?? {}).length > 0) return failed('already_exists', threadId);
+      emitSafely('orchestrator.started', { threadId }); // the window shows the goal as "planning" from here
       await graph.invoke({ goal: goal.trim() }, configFor(threadId));
-      return summarize(threadId, await snapshotOf(threadId));
+      starting.delete(threadId); // before summarizing: this call is finished, so the run is not "running" any more
+      return announceIfFailed(summarize(threadId, await snapshotOf(threadId), { settled: true }));
     } catch {
-      return failed('error', threadId);
+      starting.delete(threadId);
+      return announceIfFailed(failed('error', threadId));
     } finally {
       starting.delete(threadId);
     }
   }
 
-  const starting = new Set(); // thread ids being started right now
+  const starting = new Map(); // thread id -> its goal (cut short), for runs being started right now
   const resuming = new Map(); // threadId -> the resume in progress, so two answers at once resume once
 
   async function resumeNow(threadId) {
     const snapshot = await snapshotOf(threadId);
-    const summary = summarize(threadId, snapshot);
+    const summary = summarize(threadId, snapshot, { settled: true });
     if (summary.status !== 'waiting') return summary;
 
     let row = null;
@@ -311,7 +358,7 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     if (!FINAL_ANSWERS.includes(row?.status)) return summary;
 
     await graph.invoke(new Command({ resume: row.status }), configFor(threadId));
-    return summarize(threadId, await snapshotOf(threadId));
+    return announceIfFailed(summarize(threadId, await snapshotOf(threadId), { settled: true }));
   }
 
   /** Continue a waiting run if its decision has been answered. Only `threadId` is read from the request. */
@@ -339,4 +386,4 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
   return { start, resume, status };
 }
 
-module.exports = { createOrchestrator };
+module.exports = { createOrchestrator, MAX_GOAL_CHARS };

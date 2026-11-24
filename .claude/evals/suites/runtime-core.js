@@ -22,8 +22,10 @@
 //                            any other thrown error becomes { code: 'internal_error', message: <generic> }
 //                            error codes: unknown_command, invalid_args, audit_unavailable, internal_error,
 //                              runtime_stopped, runtime_not_configured
-//   src/runtime/commands.js  registerCommands(runtime, { store, decisions? }) registers exactly:
-//                            runtime.status, decisions.list, decisions.resolve, agents.pause
+//   src/runtime/commands.js  registerCommands(runtime, { store, decisions?, orchestrator? }) registers exactly:
+//                            runtime.status, decisions.list, decisions.resolve, agents.pause, goals.list
+//                            goals.list({ limit? }) returns { goals } from orchestrator.listGoals({ limit });
+//                            with no orchestrator it answers "not_available"
 //                            decisions.resolve calls decisions.resolve({ id, decision, via: 'dashboard', note? })
 //                            on the decisions service (src/runtime/decisions.js, step 1.6); a DecisionError
 //                            keeps its code and message, anything else is generic; with no service the
@@ -293,10 +295,51 @@ const cases = [
 
   // ---- commands ---------------------------------------------------------
   {
-    id: 'the-runtime-registers-exactly-the-four-planned-commands',
+    // A deliberate guard: a new window command is a new capability, so adding one means updating this list.
+    // goals.list (step 1.9 follow-up, Nov 24, 2026) is how the window shows the founder's goals.
+    id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'decisions.list', 'decisions.resolve', 'runtime.status']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status']), `got ${json(runtime.commands())}`);
+    },
+  },
+  {
+    id: 'goals-list-returns-the-orchestrators-goals-and-limits-the-size',
+    async check() {
+      const calls = [];
+      const goals = [{ threadId: 'a', status: 'waiting', goal: 'Buy a domain' }];
+      const orchestrator = { async listGoals(args) { calls.push(args); return goals; } };
+      const { runtime } = setupWithCommands({}, { orchestrator });
+      const plain = await runtime.invoke('goals.list', {});
+      const limited = await runtime.invoke('goals.list', { limit: 5 });
+      const bad = [await runtime.invoke('goals.list', { limit: 51 }), await runtime.invoke('goals.list', { limit: 0 }), await runtime.invoke('goals.list', { limit: 'x' }), await runtime.invoke('goals.list', { status: 'done' })];
+      const ok = plain.ok && json(plain.data.goals) === json(goals) && limited.ok && calls.length === 2 && calls[0].limit <= 50 && calls[1].limit === 5 && bad.every((r) => r.error?.code === 'invalid_args');
+      return verdict(ok, `plain ${json(plain)}, calls ${json(calls)}, bad ${json(bad.map((r) => r.error?.code))}`);
+    },
+  },
+  {
+    id: 'goals-list-without-an-orchestrator-says-not-available',
+    async check() {
+      const { runtime } = setupWithCommands();
+      const r = await runtime.invoke('goals.list', {});
+      return verdict(r.ok === false && r.error?.code === 'not_available', json(r));
+    },
+  },
+  {
+    id: 'a-failing-orchestrator-gives-a-generic-error-for-goals-list',
+    async check() {
+      const orchestrator = { async listGoals() { throw new Error('connection to db.internal failed SECRETVALUE4'); } };
+      const { runtime } = setupWithCommands({}, { orchestrator });
+      const r = await runtime.invoke('goals.list', {});
+      return verdict(r.error?.code === 'internal_error' && !json(r).includes('SECRETVALUE4') && !json(r).includes('db.internal'), json(r));
+    },
+  },
+  {
+    id: 'goals-list-is-audited-like-any-other-command',
+    async check() {
+      const { store, runtime } = setupWithCommands({}, { orchestrator: { async listGoals() { return []; } } });
+      await runtime.invoke('goals.list', {});
+      return verdict(inserts(store).some((e) => e[1] === 'audit_log' && e[2].action === 'command.goals.list'), json(inserts(store).map((e) => e[2].action)));
     },
   },
   {

@@ -134,16 +134,24 @@ function findTimes(fields) {
 
 const hasBothCurrencies = (cost) => /₹\s?\d/.test(cost) && /\$\s?\d/.test(cost);
 
+// An honest "the price is not known": the founder's decision of Nov 24, 2026 (a goal such as "buy a domain"
+// has no price in it, and a writer that must not invent one could never produce a card). It is accepted only
+// when the cost text has NO digits at all, so a half-guess like "Unknown, maybe ₹500" still has to follow the
+// two-currency rule, and only when it says so in words. Money of an unknown size is never "Low" risk.
+const UNKNOWN_COST_WORDS = /\b(?:unknown|not\s+(?:yet\s+)?(?:known|stated|given|confirmed|provided)|to\s+be\s+confirmed)\b/i;
+const isUnknownCost = (cost) => !/\d/.test(cost) && UNKNOWN_COST_WORDS.test(cost);
+
 // ---- the checker ------------------------------------------------------------
 
-const CODE_ORDER = ['missing_field', 'bad_risk_level', 'jargon', 'contains_code', 'cost_format', 'time_format'];
+const CODE_ORDER = ['missing_field', 'bad_risk_level', 'jargon', 'contains_code', 'cost_format', 'unknown_cost_low_risk', 'time_format'];
 
 const MESSAGES = {
   missing_field: 'is missing or empty. Fill it in with plain words.',
   bad_risk_level: 'must be exactly Low, Medium or High.',
   jargon: 'is a technical word. Use an everyday word, or explain it in brackets right after it (at least three words).',
   contains_code: 'looks like code or a command. Remove it; technical text belongs in "details".',
-  cost_format: 'must show both rupees and dollars with numbers, like "₹1,200 ($15)". Write "₹0 ($0)" if it is free.',
+  cost_format: 'must show both rupees and dollars with numbers, like "₹1,200 ($15)". Write "₹0 ($0)" if it is free. If the price really is not known, write "Price not known yet" with no number, and never guess one.',
+  unknown_cost_low_risk: 'cannot be Low when the cost is not known. Use Medium or High, because money of an unknown size is not a small risk.',
   time_format: 'is a clock time without "IST". Write the time in IST, like "9:00 AM IST".',
   writer_error: 'the writer did not return a card. Try again.',
 };
@@ -182,8 +190,15 @@ function inspect(card) {
   add('risk.reason', isPlainObject(risk) ? risk.reason : undefined);
   add('recommendation', card.recommendation);
 
-  if (hasText(card.cost) && !hasBothCurrencies(clean(card.cost))) {
-    findings.push({ code: 'cost_format', field: 'cost', match: snippet(clean(card.cost)) });
+  if (hasText(card.cost)) {
+    const cost = clean(card.cost);
+    if (isUnknownCost(cost)) {
+      if (isPlainObject(risk) && hasText(risk.level) && clean(risk.level) === 'Low') {
+        findings.push({ code: 'unknown_cost_low_risk', field: 'risk.level', match: 'Low' });
+      }
+    } else if (!hasBothCurrencies(cost)) {
+      findings.push({ code: 'cost_format', field: 'cost', match: snippet(cost) });
+    }
   }
   findings.push(...findJargon(fields), ...findCode(fields), ...findTimes(fields));
   return outcome(findings);
@@ -296,7 +311,7 @@ function writerInstructions() {
     'Rewrite the request below as a decision card for a founder who is not technical. They must understand it in under 30 seconds.',
     'Reply with one JSON object with exactly these fields: decide, why_now, if_yes, if_no, cost, risk, recommendation, and optionally details.',
     '- decide: the one thing to decide, as a question. why_now: why it needs an answer now. if_yes: what happens if they say yes. if_no: what happens if they say no.',
-    '- cost: both currencies with numbers, like "₹1,200 ($15)". Write "₹0 ($0)" only if it is truly free.',
+    '- cost: both currencies with numbers, like "₹1,200 ($15)". Write "₹0 ($0)" only if it is truly free. If the request gives no price, write exactly "Price not known yet" with no number (never guess one), and then the risk level must be Medium or High.',
     `- risk: { "level": one of ${RISK_LEVELS.join(', ')}, "reason": one short line saying why }.`,
     '- recommendation: yes or no, with a short reason if it helps.',
     '- Short sentences and everyday words. No code, commands, file names or version numbers.',

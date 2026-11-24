@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('api', {
     list: (args) => invoke('decisions.list', args),
     resolve: (args) => invoke('decisions.resolve', args),
   },
+  goals: {
+    list: (args) => invoke('goals.list', args),
+  },
   agents: {
     pause: (args) => invoke('agents.pause', args),
   },
