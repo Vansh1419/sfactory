@@ -13,6 +13,7 @@ const { createPolicyTools } = require('./policy-tools');
 const { createRouter } = require('./router');
 const { buildProviders } = require('./providers');
 const { createTelegramService, telegramProblem } = require('./telegram');
+const { createOrchestratorService } = require('./orchestrator/service');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -31,7 +32,7 @@ function createApp({ env, fetchImpl, version }) {
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -74,6 +75,26 @@ function createApp({ env, fetchImpl, version }) {
   });
   const telegramIssue = telegramProblem(env); // a setting that is wrong must be said, not silently ignored
 
+  // The orchestrator: plans a goal, runs routine actions, and pauses on a card for anything that needs the
+  // founder. It finds a run again from its card, so an answer from Telegram or the dashboard resumes it,
+  // and runs waiting when the app was closed are resumed on start. The planner, the card writer and the
+  // tools are not connected yet (the model-written planner and card writer, then tool loading in step 1.10),
+  // so until then a goal fails cleanly at planning and no tool can run. The policy is the live one.
+  const notConnected = (what) => async () => {
+    throw new Error(`${what} is not connected yet`);
+  };
+  const orchestrator = createOrchestratorService({
+    store,
+    rawAudit: audit,
+    decisions,
+    policy: policyTools.policy,
+    runtime,
+    planner: notConnected('The planner'),
+    writeCard: notConnected('The card writer'),
+    runTool: notConnected('Tool loading'),
+    onError: () => runtime.emit('orchestrator.error', {}),
+  });
+
   return {
     runtime,
     store,
@@ -81,6 +102,7 @@ function createApp({ env, fetchImpl, version }) {
     policyTools,
     router,
     telegram,
+    orchestrator,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -97,6 +119,7 @@ function createApp({ env, fetchImpl, version }) {
         runtime.emit('runtime.ready', {});
         if (telegramIssue) runtime.emit('telegram.problem', { message: telegramIssue });
         telegram?.start();
+        orchestrator.start(); // listens for answers, then recovers waiting runs in the background
         return { ok: true };
       } catch (err) {
         const code = err?.cause?.code ?? 'error';
@@ -108,6 +131,7 @@ function createApp({ env, fetchImpl, version }) {
 
     async stop() {
       telegram?.stop();
+      orchestrator.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });

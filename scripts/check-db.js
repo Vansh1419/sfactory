@@ -2,7 +2,7 @@
 'use strict';
 
 // PLAN.md step 1.1: after you apply supabase/migrations to your real Supabase project,
-// this checks that all 12 core tables exist and answer to the service key.
+// this checks that all 14 core tables exist and answer to the service key.
 // Read-only: one GET per table, no writes. Never prints a secret.
 //
 //   npm run check:db
@@ -19,6 +19,7 @@ const TIMEOUT_MS = 8000;
 const TABLES = [
   'clients', 'projects', 'pods', 'agents', 'pod_members', 'tasks',
   'decisions', 'audit_log', 'memory', 'agent_events', 'scaling_rules', 'policy_tools',
+  'graph_checkpoints', 'graph_writes',
 ];
 
 async function checkTable(env, table, fetchImpl = fetch) {

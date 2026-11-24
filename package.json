@@ -20,6 +20,9 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.17",
     "@electric-sql/pglite-pgvector": "^0.0.18",
+    "@langchain/core": "^1.5.1",
+    "@langchain/langgraph": "^1.7.5",
+    "@langchain/langgraph-checkpoint": "^1.2.3",
     "@tailwindcss/vite": "^4.3.5",
     "@vitejs/plugin-react": "^6.3.0",
     "electron": "^45.4.1",

@@ -34,7 +34,10 @@ Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 54 | 100% | 1.8 | pass |
-| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 24 | 100% | 1.1 | pass |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
+| `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
+| `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 40 | 100% | 1.7c | pass |
+| `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 16 | 100% | 1.7d | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 26 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
@@ -186,11 +189,73 @@ Contract: `createBot({ api, founderChatId, decisions, policyTools, onError? })` 
 
 Judgment calls to confirm with the founder: messages from other chats get no reply and no audit entry (a reply would tell a stranger the bot exists, and an entry per message would let a stranger fill the log); `/brief`, `/status` and `/pause` are honest "not available yet" replies until the orchestrator and the agent controls exist; all text is plain, with no formatting, so a card cannot be made to look like something it is not.
 
+### graph-checkpointer
+
+Suite: `.claude/evals/suites/graph-checkpointer.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/orchestrator/checkpointer.js`, with 6 fast unit tests in `checkpointer.test.js` (a fake store that counts calls). It runs against the real REST client and a real Postgres with the real migrations (`scripts/fake-supabase.js`), so the two new tables (`graph_checkpoints`, `graph_writes`) and the code agree.
+
+**Cases:** 20
+
+Contract: `createSupabaseSaver({ store })` returns a LangGraph `BaseCheckpointSaver` (`getTuple`, `list`, `put`, `putWrites`, `deleteThread`). The REST store can select, insert and update with equality filters only, so the saver checks, then inserts or updates, and filters `before` and metadata in code. Values are stored as base64 text.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Saving and loading | 7 | A saved checkpoint comes back as the latest, with its metadata; the latest is the newest and an id asks for an older one; the parent config points at the checkpoint before; an empty thread or unknown id gives `undefined`; threads and namespaces never see each other; unicode, nesting, 300 KB of text and raw bytes survive; saving the same id again replaces it |
+| Pending writes | 4 | Writes come back with their own checkpoint, sorted by task and position; an ordinary write repeated keeps the first, a special one (an interrupt) is replaced; writes belong only to the checkpoint they were made for; a missing thread or checkpoint id throws |
+| Listing | 4 | Newest first and only for its own thread; `limit`, `before` and a metadata filter; each item carries its pending writes; a `limit` is handed to the database and pending writes are loaded only for the rows actually returned (added after the code review of Nov 24, 2026) |
+| Failure | 2 | A failing store makes the saver fail loudly; deleting a thread says it is not supported yet (the REST store cannot delete) |
+| A real graph | 3 | A graph that paused for approval resumes through a **new saver and a new graph over the same database**, as after an app restart; a rejected answer does not run the action; two paused graphs resume independently |
+
+Judgment calls: deleting a thread is unsupported, so finished runs stay in the tables (they are small, and a delete can be added to the store with its own eval); checkpoints older than LangGraph's version 4 format are not read, because this store never held any.
+
+### orchestrator
+
+Suite: `.claude/evals/suites/orchestrator.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/orchestrator/graph.js`, with 5 unit tests in `graph.test.js`. The planner, card writer and tool runner are passed in, so no model or real tool is involved. The policy is the REAL policy (`src/runtime/policy.js`); the decisions service is a small fake that files cards and lets a test answer them; one case uses the real checkpoint store over a real Postgres.
+
+**Cases:** 40
+
+Contract: `createOrchestrator({ planner, writeCard, runTool, decisions, policy, checkpointer, audit, emit? })` returns `start({ goal, threadId? })`, `resume({ threadId })` and `status({ threadId })`. Results are `{ threadId, status: 'waiting' | 'done' | 'failed' | 'unknown', waitingFor, reason?, results, log }`. The full contract, the outcomes and the failure reasons are in the header of the suite file.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Routine and pausing | 6 | Routine actions run with no decision; a goal with a spend pauses and runs nothing after it; the card comes from the writer and the action passed on holds only what the policy reads; a planner that claims "approved" cannot skip the decision; an unknown tool files a card in the `unknown` category; two spends pause one at a time |
+| Resuming | 7 | Approving and resuming runs the spend and then the rest; a rejected or cancelled decision skips it and the rest still runs; resuming before an answer changes nothing and files no second card; "asked for more information" keeps waiting; `resume` reads the stored decision and ignores anything the caller claims; a finished run cannot be resumed into running anything again; a thread that does not exist is `unknown` and never throws |
+| The unknown-tool rule | 1 | An approved decision for an unknown tool does **not** run the tool, and the log says to add it to the policy table first |
+| Failure behaviour | 6 | An event listener that throws does not break the run or file a second card; a tool that fails is recorded, never retried and never leaks (later tasks still run); a card that cannot be written, a card the decisions service rejects, a decision that cannot be filed, and a policy that throws each block that task and never run it (the policy fails closed) |
+| Audit | 6 | If the `orchestrator.waiting` entry cannot be written the card is cancelled and the task does not run; that entry links the decision to its run, which is how the app finds the run again; the run is audited at the start and before each tool runs; if the tool run cannot be audited the tool does not run; if the start cannot be audited nothing is planned, filed or run; the tool runner gets a stable idempotency key per task |
+| Planning input | 4 | A plan with unusable arguments (a function, a symbol, a bigint, a circular reference, over 10,000 characters, not a plain object) is a `bad_plan`, not a crash; a blank, non-text or oversized goal is refused before planning; a bad plan (not a list, empty, over 20 tasks, a missing title, tool or action, a bad access tag, a blank title) fails the run with nothing filed or run; a planner that throws fails the run and its error text is never shown |
+| Isolation and safety | 6 | Starting the same thread twice at once runs it once; a thread id that already exists is refused and left alone; two runs at once do not mix their decisions; a tool's output is never kept in the result or the log; `status` reports waiting, then done, with the log in order; events carry ids only, never the goal or card text |
+| Crashes | 3 | A crash right after a tool runs (the result never recorded), right after an **approved** tool runs, or right after a card is filed but before the run is saved: the run is reported `interrupted`, never continued, and the tool runs **at most once**; a run with a card that was never saved is `interrupted`, not "waiting" (added after the code review of Nov 24, 2026; the first two failed with the tool run twice before the fix) |
+| Real checkpoint store | 1 | A waiting run resumes through a **new orchestrator and a new saver over the same database**, as after an app restart |
+
+Checked by mutation on Nov 24, 2026: 10 realistic mistakes were each introduced into `graph.js` one at a time (an approved unknown tool runs, everything counts as allowed, a policy error lets the task run, "asked for more information" resumes the run, a rejection still runs the tool, a tool runs without an audit entry, planner extras reach the action, a failed tool is retried, an existing run can be started over, a tool's output is kept in the log). All 10 are caught; the first try at the last one was a badly made mutation (it never leaked anything) and was redone properly.
+
+Checked by mutation a second time on Nov 24, 2026, after the review fixes: 8 more mistakes (saves back to the background, an interrupted run called "waiting", the start id not reserved, events that can throw inside a step, arguments with functions dropped quietly, no size cap on arguments, a card left behind when it cannot be linked, the waiting entry never written). All 8 are caught. **Finding along the way:** LangGraph's default saves each step in the background, so when saving fails the run keeps going and runs later tools that are not being recorded; the orchestrator now runs with `durability: 'sync'` (each step is saved before the next starts).
+
+Judgment calls to confirm with the founder: a rejected or cancelled spend skips only that task and the rest of the plan still runs; a failed action is never retried automatically; a task whose card cannot be written is skipped, not run; a plan is capped at 20 tasks and a goal at 2000 characters; a run that stopped part-way is reported `interrupted` and left for you to re-plan, never continued automatically (a tool runs at most once). A known gap: if the app stops between filing a card and saving the run, that card stays pending but no run waits on it, so answering it does nothing (it never runs anything).
+
+### orchestrator-service
+
+Suite: `.claude/evals/suites/orchestrator-service.js`. No dataset. Code under test: `src/runtime/orchestrator/service.js`. It runs against the REAL audit log and checkpoint store on a real Postgres with the real migrations (`scripts/fake-supabase.js`), one fresh database per case; the decisions service is a small fake and the policy is the real one.
+
+**Cases:** 16
+
+Contract: `createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError? })` returns `submitGoal`, `status`, `start()` and `stop()`. A run that files a card writes an `orchestrator.waiting` audit entry (target = the decision, detail = the run's thread id); that is how an answer finds its run again, with no new table.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Linking | 1 | A paused run leaves an audit entry linking the decision to the run |
+| Resuming | 6 | An approval event resumes the run and runs the spend; a rejection event skips it; an event for a decision no run waits on, or with no id, does nothing and never throws; the same answer delivered twice (even at once) runs the tool once; two waiting runs resume independently; an answer that came **before** the run finished pausing is applied right after |
+| Recovery | 4 | A card answered while the app was closed resumes its run on start; a run still waiting stays waiting; a finished run is never run again by recovery; recovery that cannot read the audit log reports it and does not throw |
+| Starting and stopping | 3 | `start` listens for answers and `stop` stops; starting twice listens once; after `stop` an answer does nothing |
+| Passing through | 2 | A bad goal or a failed plan comes back as a failure with no error text; the audit log holds only ids, never the goal or the card |
+
+Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (answers ignored, recovery that does nothing, no unsubscribe on stop, subscribing on every start, a fast answer not applied after pausing, the link entry losing its target, an unchecked id looked up, the goal written into the audit entry). 7 are caught; the eighth is an equivalent change, because the runtime keeps listeners in a set and adding the same function twice changes nothing.
+
 ### database-schema
 
 Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
 
-**Cases:** 24
+**Cases:** 25
 
 How it works: the migrations are applied, in filename order, to a real Postgres running inside the test (PGlite, which is PostgreSQL 18, with pgvector). It is dressed like Supabase: the `anon`, `authenticated` and `service_role` roles, an `auth.jwt()` that reads the request's claims, and Supabase's default grants (which the migrations must take back). A fixture creates two pods with rows in every table. Each case then acts as someone specific (a pod agent with a `pod_id` claim, no claim, `anon`, the runtime's `service_role`, or the table owner) and tries things, always inside a transaction that is rolled back. Attack cases include a positive control (the same action on the pod's own data must succeed) so a case cannot pass just because everything is blocked. The contract (tables and columns the fixture inserts into) is in the header of the suite file.
 
@@ -198,9 +263,9 @@ Limits: this proves the policies and rules, not that they apply to your real pro
 
 | Group | Cases | What it checks |
 |---|---|---|
-| Schema | 5 | Migrations apply to an empty database; all 12 core tables exist; row-level security is on for every public table (a future table without it fails this); `anon` has no privileges on any table; `memory.embedding` is a 768-dimension `pgvector` column and nearest-neighbour search works |
+| Schema | 5 | Migrations apply to an empty database; all 14 core tables exist; row-level security is on for every public table (a future table without it fails this); `anon` has no privileges on any table; `memory.embedding` is a 768-dimension `pgvector` column and nearest-neighbour search works |
 | Reading | 5 | A pod reads only its own rows in six tables; sees only its own pod and project; sees only its own project's client; sees only its own members plus shared specialists; a request with no pod claim sees nothing anywhere |
-| Writing | 5 | A pod cannot write into, or move rows to, another pod; cannot approve its own request, including a fully forged approval; cannot read scaling rules or touch the audit log; cannot delete its rows; **a pod, a request with no pod claim and `anon` cannot read or write the policy table** (the runtime can) |
+| Writing | 6 | A pod, a request with no pod claim and `anon` cannot read or write the two graph checkpoint tables, while the runtime can (added in step 1.7b). A pod cannot write into, or move rows to, another pod; cannot approve its own request, including a fully forged approval; cannot read scaling rules or touch the audit log; cannot delete its rows; **a pod, a request with no pod claim and `anon` cannot read or write the policy table** (the runtime can) |
 | Runtime | 1 | The runtime's `service_role` sees everything |
 | Integrity | 7 | The audit log is append-only even for the table owner (update, delete, truncate); a resolved decision is frozen; a decision's content (card, action, category, pod, amounts) cannot change after filing; approved or rejected needs a resolver and a time; a card needs all seven fields; **a policy rule is fixed once it exists (tool, kind, category, access) and cannot be deleted, a removed rule stays removed; a rule must be well formed (an ask rule has a category and no access tag, a routine rule the reverse, lower-case ASCII names, no agent as proposer, no active rule nobody confirmed) and a tool has one live rule at a time, though a removed tool can be proposed again** |
 | Seed | 1 | The seed creates exactly one fake pod and one fake agent, all labelled `[seed]`, and can run twice without duplicating |

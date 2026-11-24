@@ -23,7 +23,7 @@ const { IDS, EMBEDDING_DIMENSIONS, vec, build, applySeed, getEnv, who, withRole,
 
 const TABLES = [
   'tasks', 'agents', 'decisions', 'audit_log', 'memory', 'clients', 'projects',
-  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools',
+  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes',
 ];
 const POD_ROWS = ['tasks', 'decisions', 'memory', 'agent_events', 'audit_log', 'pod_members'];
 
@@ -305,6 +305,31 @@ const cases = [
           if (add.ok) problems.push(`${name} added a routine tool`);
           const edit = await attempt(tx, "update policy_tools set status = 'active', confirmed_via = 'telegram', activated_at = now()");
           if (edit.ok && edit.count > 0) problems.push(`${name} activated a rule`);
+        });
+      }
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-pod-cannot-read-or-write-the-graph-checkpoint-tables',
+    async check(db) {
+      const problems = [];
+      const row = "insert into graph_checkpoints (thread_id, checkpoint_id, checkpoint, metadata) values ('t', 'c1', 'e30=', 'e30=')";
+      const write = "insert into graph_writes (thread_id, checkpoint_id, task_id, idx, channel, value) values ('t', 'c1', 'task', 0, 'x', 'e30=')";
+      await withRole(db, who.service, async (tx) => {
+        const control = [await attempt(tx, row), await attempt(tx, write)];
+        if (!control.every((r) => r.ok)) problems.push('control failed: the runtime cannot write a checkpoint and a write');
+        const seen = await attempt(tx, 'select (select count(*) from graph_checkpoints) as a, (select count(*) from graph_writes) as b');
+        if (!seen.ok || Number(seen.rows[0].a) !== 1 || Number(seen.rows[0].b) !== 1) problems.push('control failed: the runtime cannot read them back');
+      });
+      for (const [name, actor] of [['pod', who.pod(IDS.podA)], ['no pod claim', who.noPod], ['anon', who.anon]]) {
+        await withRole(db, actor, async (tx) => {
+          for (const table of ['graph_checkpoints', 'graph_writes']) {
+            const read = await attempt(tx, `select * from ${table}`);
+            if (read.ok && read.rows.length > 0) problems.push(`${name} reads ${table}`);
+          }
+          if ((await attempt(tx, row)).ok) problems.push(`${name} wrote a checkpoint`);
+          if ((await attempt(tx, write)).ok) problems.push(`${name} wrote a pending write`);
         });
       }
       return verdict(problems.length === 0, problems.join('; '));

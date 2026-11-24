@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm start` — build, then launch the production build (`electron-vite preview`). `package.json` `main` points at the built `out/main/main.js`, so plain `electron .` only works after a build.
 - `npm run check:keys` — verify the accounts and keys in `.env` with one read-only call each (Groq, Telegram, Supabase, Ollama, Claude CLI, git hygiene); never prints a secret. `npm run check:keys -- --find-telegram-chat` lists the chat IDs that messaged your bot.
 - `npm run db:migrate` — apply `supabase/migrations/*.sql` to your Supabase project through the management API (needs `SUPABASE_ACCESS_TOKEN` in `.env`; use `-- --dry-run` first). Records applied migrations, refuses to run over a project that already has tables or to apply out of order. Add new migrations as new files; never edit an applied one.
-- `npm run check:db` — after applying the migrations to your Supabase project, check that all 12 core tables exist (read-only; uses `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`).
+- `npm run check:db` — after applying the migrations to your Supabase project, check that all 14 core tables exist (read-only; uses `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`).
 - `npm test` — unit tests (`node --test` over `.claude/**/*.test.js`, `src/**/*.test.js` and `scripts/**/*.test.js`; the globs are explicit because Node's default discovery skips dot-directories). Single file: `node --test .claude/evals/lib.test.js`.
 - `npm run eval` — run all eval suites in `.claude/evals/suites/`. One suite: `node .claude/evals/run.js policy-check`. Add `--verbose` to list every case.
 - `npm run eval:strict` — same, but suites whose code isn't written yet count as failures. Use this at phase gates.
