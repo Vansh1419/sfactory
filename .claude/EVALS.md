@@ -30,7 +30,10 @@ Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 | `invariants` | The repo itself: architecture, security settings, docs in sync | 13 | 100% | 0.4 | pass |
 | `policy-check` | `src/runtime/policy.js` | 44 | 100% | 1.4 | pass |
 | `decision-cards` | `src/runtime/cards.js` | 44 | 100% | 1.5 | pass |
-| `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pending |
+| `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
+| `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
+| `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 54 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 24 | 100% | 1.1 | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 26 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -105,7 +108,7 @@ Judgment calls, **confirmed by the founder on Nov 23, 2026** (the three below; t
 
 ### claude-code-provider
 
-Suite: `.claude/evals/suites/claude-code-provider.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/providers/claude-code.js` (not written yet).
+Suite: `.claude/evals/suites/claude-code-provider.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/providers/claude-code.js`, with unit tests in `src/runtime/providers/claude-code.test.js` (the process launcher, with a stand-in for `execFile`). One live call was made on Nov 24, 2026: it returned `OK` from `claude-haiku-5-5` for about $0.0006.
 
 **Cases:** 12
 
@@ -125,6 +128,63 @@ Contract: `buildInvocation({ prompt, env, tmpDir }) -> { command, args, cwd, env
 | `parses-a-successful-result` | Text, model, cost and `isError` are read from the JSON result |
 | `reports-is-error-results` | An `is_error` result is reported as an error, so the router falls through |
 | `garbage-output-is-an-error-not-a-throw` | Non-JSON output becomes an error result and never crashes the router |
+
+### model-router
+
+Suite: `.claude/evals/suites/model-router.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/router.js`, with unit tests in `src/runtime/router.test.js`.
+
+**Cases:** 35
+
+Contract: `createRouter({ providers, audit, sleep, caps? })` returns `complete({ taskId, tier, prompt, sensitive? })`, which never throws and answers `{ ok: true, text, provider, model, costUsd, attempts }` or `{ ok: false, reason, message }`. Also `validateProviders(list)` and `defaultProviderConfig()`. Providers are mocks and `sleep` is injected, so no model is called and nothing waits. The full contract is in the header of the suite file.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Chain | 6 | The first provider that answers wins and the chain stops; a failing chain falls through all three in the configured order (not alphabetical); everything failing returns a failure and never throws; provider error text (it can hold a key) never reaches the caller; an empty list is a clean `no_provider`; a provider added by configuration alone is used |
+| Retry and backoff | 5 | A provider is retried and can then succeed; retries stop at the limit and the chain moves on; delays between retries grow; an answer with no text, or an empty one, counts as a failure |
+| Tiers and sensitive text | 5 | The strong tier skips providers not allowed for it; an unknown tier is refused; sensitive text goes only to a provider marked `sensitive: true`, deny by default (a missing flag, `"true"` or `1` does not count); non-sensitive text may use any provider |
+| Caps | 6 | A step cap and a token cap each stop a task and call nothing more; caps are per task; a request with no task id, a blank prompt or a non-string prompt is refused before any call |
+| Concurrency | 2 | Five parallel calls never put more than two in flight on a provider capped at two; a provider at its cap is skipped and the next one answers, never queued |
+| Audit | 4 | Every attempt is audited before the call; the entry names provider, model and task and never holds the prompt or the answer; if the audit entry cannot be written no provider is called; the result reports cost and attempt count |
+| Configuration | 7 | `validateProviders` accepts a good list, rejects duplicate names, bad or empty tiers and a missing `call`, and never throws on garbage; the default config is groq, ollama, claude-code in that order, keeps the two hosted providers away from sensitive text, makes Claude Code last with a cap of two calls, and passes its own validation once calls are attached |
+
+Judgment calls to confirm with the founder: a provider at its concurrency cap is skipped rather than queued (a Groq outage must not pile up waiting calls); a failed audit write stops the call ("no audit, no action", as in step 1.2); the default caps (20 steps and 50,000 tokens per task, 2 retries, 500 ms base delay) are a starting set to tune.
+
+### http-providers
+
+Suite: `.claude/evals/suites/http-providers.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/providers/groq.js`, `ollama.js` and `index.js`. No network is used: `fetch` is a stand-in, and the key is a dummy.
+
+**Cases:** 21
+
+Contract: `createGroqCall({ apiKey, fetchImpl })`, `createOllamaCall({ baseUrl, fetchImpl })` and `buildProviders({ env, fetchImpl, run? })`. A `call({ prompt, model })` resolves to `{ text, model, costUsd, tokens }` or throws, and the router treats a throw as a failed attempt.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Groq | 8 | Posts to Groq's https API with the key only as a bearer token (never in the URL or body); one user message with the model and prompt; text, model and token count come back; an error status, a network failure, an answer with no text, and a missing or blank key all throw, and no message holds the key or the response body; a missing key sends no request at all |
+| Ollama | 5 | Posts to `<base>/api/chat` with streaming off; defaults to `http://localhost:11434` and ignores a trailing slash; text, model and token count (prompt plus generated) come back; a base URL that is not http or https (`file:`, `javascript:`, `ftp:`, garbage) is refused before any request; an error status or a missing message throws |
+| Provider list | 8 | Order is groq, ollama, claude-code; Groq is left out when its key is missing or blank; model names come from `GROQ_MODEL` and `OLLAMA_MODEL` with placeholder defaults; the list passes the router's own validation; hosted providers are kept away from sensitive text and Claude Code is last with a cap of 2; the key is never stored on an entry; the Groq and Ollama entries really use `GROQ_API_KEY` and `OLLAMA_BASE_URL` |
+
+Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; when a paid plan is used, pricing is added then.
+
+### telegram-bot
+
+Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
+
+**Cases:** 54
+
+Contract: `createBot({ api, founderChatId, decisions, policyTools, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Only the founder | 5 | A message or a button tap from any other chat does nothing (no reply, no service call); the sender must be the founder even inside the founder's chat; the chat id matches as a string or a number; garbage updates never throw |
+| Cards | 7 | A card goes to the founder's chat with Approve and Reject buttons; the text shows all seven fields and never the "Show details" text; button data fits Telegram's 64-byte limit; a card that is not pending is never sent; a reminder says it is a reminder; a very long card is cut below 4096 characters; every message is plain text with no parse mode |
+| Taps | 13 | A database problem is explained in a sentence that says what to do (a missing table points to the migrations, an unreachable database to the connection, a rejected key to `SUPABASE_SERVICE_ROLE_KEY` in `.env`), and any other database error stays generic with the store's own text never shown (added after the first real-Telegram try, Nov 24, 2026); if editing the message fails after an answer or a policy confirm, the outcome is sent as a new message and the founder is never told "nothing was changed"; a failing callback answer is reported to `onError`, never thrown (added after the code review of Nov 24, 2026). Approve and Reject resolve through the decisions service as `via: 'telegram'` and nothing else; the message then shows the answer and loses its buttons; every tap answers the callback so the spinner stops; a card answered elsewhere first is reported as it is, not as the tap; a raw error never reaches the founder (a pasted key included) while a `DecisionError`, which is written for the founder, does; bad button data calls nothing |
+| Policy commands | 8 | `/tools` lists additions; `/addtool <tool> ask <category>` is active at once; the category words map to the four policy categories; a routine addition asks Yes or No first, and only Yes confirms (No cancels); `/removetool` removes; badly formed commands get help and call nothing; a `PolicyToolError` is shown and other errors are not |
+| Add this tool | 4 | A tool name that is odd (newlines, spaces, over 100 characters, empty) is refused and never shown or proposed; an unknown-tool card offers the buttons and no other card does; the tool name comes from the stored decision, never from the button; the routine option asks for a Yes before it takes effect |
+| Other commands | 5 | A command that fails is reported to `onError` while the founder gets the generic sentence; `/brief`, `/status` and `/pause` say they are not available yet (their data arrives with later steps) and call nothing; `/help` and `/start` list the commands; unknown commands and plain text get a hint and call nothing; `/tools@botname` works |
+| API client | 5 | Calls `https://api.telegram.org/bot<token>/<method>` with no token in the body and no parse mode; send, edit and answer use the right methods; `getUpdates` sends offset and timeout; no error message or stack ever holds the token; no token means no request |
+| Poller | 7 | On start it skips whatever piled up while the app was closed (so a restart cannot replay an old confirm or removal; a tap made while closed must be made again); updates that arrive after `stop()` are not handled; starting twice runs one loop; updates are handled in order and the offset moves past them; a handler that throws neither stops the loop nor repeats the update; a failed poll waits longer each time and then recovers; `stop()` ends the loop |
+
+Judgment calls to confirm with the founder: messages from other chats get no reply and no audit entry (a reply would tell a stranger the bot exists, and an entry per message would let a stranger fill the log); `/brief`, `/status` and `/pause` are honest "not available yet" replies until the orchestrator and the agent controls exist; all text is plain, with no formatting, so a card cannot be made to look like something it is not.
 
 ### database-schema
 

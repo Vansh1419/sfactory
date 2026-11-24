@@ -232,7 +232,7 @@ test('reminders refuse bad settings and a missing notifier', async () => {
 test('the notifier gets a copy: changing it changes nothing in the store', async () => {
   const ctx = setup();
   await file(ctx);
-  ctx.clock.now = new Date('2026-11-24T10:00:00Z');
+  ctx.clock.now = new Date(Date.now() + 24 * 60 * 60 * 1000); // a day after the fake store stamped the card
   await ctx.service.remindDue({
     afterMs: 1000,
     notify: async (d) => {
@@ -247,7 +247,7 @@ test('the notifier gets a copy: changing it changes nothing in the store', async
 test('if the reminder cannot be audited, the claim is given back and nobody is notified', async () => {
   const ctx = setup({ failAudit: (e) => e.action === 'decision.reminded' });
   await file(ctx);
-  ctx.clock.now = new Date('2026-11-24T10:00:00Z');
+  ctx.clock.now = new Date(Date.now() + 24 * 60 * 60 * 1000); // a day after the fake store stamped the card
   let notified = 0;
   await assert.rejects(ctx.service.remindDue({ afterMs: 1000, notify: async () => { notified += 1; } }), (e) => e.code === 'audit_unavailable');
   assert.equal(notified, 0);

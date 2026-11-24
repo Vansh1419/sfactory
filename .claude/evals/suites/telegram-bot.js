@@ -1,0 +1,827 @@
+'use strict';
+
+// Grades the Telegram bot (PLAN.md step 1.8). Nothing here talks to Telegram: the bot
+// core gets a fake `api`, fake services and synthetic updates, so no token is needed.
+//
+//   src/runtime/telegram/bot.js     createBot({ api, founderChatId, decisions, policyTools })
+//                                     -> { handleUpdate(update), pushCard(decision), notifyReminder(decision) }
+//   src/runtime/telegram/api.js     createTelegramApi({ token, fetchImpl })
+//                                     -> { getUpdates({ offset, timeout }), sendMessage, editMessage, answerCallback }
+//   src/runtime/telegram/poller.js  createPoller({ api, handle, sleep, onError })
+//                                     -> { runOnce(), start(), stop() }
+//
+// The bot's api (what the fake below implements):
+//   sendMessage({ chatId, text, buttons? })        -> { messageId }   buttons: rows of { text, data }
+//   editMessage({ chatId, messageId, text, buttons? })
+//   answerCallback({ id, text? })
+// All text is plain: no parse mode, so nothing a card says can be read as formatting.
+// Button data is the bot's own business, so tests find buttons by their label.
+//
+// The bot calls the decisions service and the policy tools and nothing else. Every
+// answer it gives goes through `via: 'telegram'`.
+
+const { loadSubject } = require('../lib');
+
+const BOT = 'src/runtime/telegram/bot.js';
+const API = 'src/runtime/telegram/api.js';
+const POLLER = 'src/runtime/telegram/poller.js';
+
+const FOUNDER = 4242;
+const STRANGER = 999;
+const ID = '11111111-1111-4111-8111-111111111111';
+const ID2 = '22222222-2222-4222-8222-222222222222';
+const SECRET = 'sb_secret_ABCDEFGHIJKLMNOP';
+const TOKEN = '123456789:AAEXAMPLEEXAMPLEEXAMPLEEXAMPLE12345';
+
+const verdict = (pass, detail) => (pass ? { pass: true } : { pass: false, detail });
+
+class DecisionError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'DecisionError';
+    this.code = code;
+  }
+}
+class PolicyToolError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'PolicyToolError';
+    this.code = code;
+  }
+}
+
+/** What the store throws: a short safe `code`, and a message that must never be shown. */
+class StoreError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'StoreError';
+    this.code = code;
+  }
+}
+
+const decision = (over = {}) => ({
+  id: ID,
+  status: 'pending',
+  category: 'spend',
+  action: { tool: 'bank.pay', access: 'write', args: {} },
+  card: {
+    decide: 'Pay the design agency',
+    why_now: 'The invoice is due on Friday',
+    if_yes: 'The agency is paid and starts the next job',
+    if_no: 'The agency pauses work',
+    cost: '₹8,000 ($96)',
+    risk: { level: 'Medium', reason: 'The amount is larger than usual' },
+    recommendation: 'Approve it',
+    details: 'SECRET-DETAILS-TEXT',
+  },
+  ...over,
+});
+
+const unknownDecision = () => decision({ id: ID2, category: 'unknown', action: { tool: 'newtool.run', access: 'write', args: {} } });
+
+/** Bot plus fakes that record everything. */
+function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false } = {}) {
+  const sent = [];
+  const edits = [];
+  const answers = [];
+  const calls = [];
+  const errors = [];
+  const known = rows ?? { [ID]: decision(), [ID2]: unknownDecision() };
+
+  const api = {
+    sendMessage: async (a) => {
+      sent.push(a);
+      return { messageId: 100 + sent.length };
+    },
+    editMessage: async (a) => {
+      edits.push(a);
+      if (editFails) throw new Error('message can not be edited');
+    },
+    answerCallback: async (a) => {
+      answers.push(a);
+      if (answerFails) throw new Error('query is too old');
+    },
+  };
+  const decisions = {
+    resolve:
+      resolve ??
+      (async (a) => {
+        calls.push(['resolve', a]);
+        return { id: a.id, status: a.decision, changed: true, conflict: false };
+      }),
+    get: async (id) => known[id] ?? null,
+  };
+  const policyTools = {
+    list: async () => {
+      calls.push(['list']);
+      return typeof policy.list === 'function' ? policy.list() : (policy.list ?? []);
+    },
+    propose: async (a) => {
+      calls.push(['propose', a]);
+      if (policy.propose) return policy.propose(a);
+      const active = a.kind === 'ask';
+      return { id: ID2, tool: a.tool, kind: a.kind, category: a.category ?? null, access: a.access ?? null, status: active ? 'active' : 'proposed', changed: true, inEffect: active };
+    },
+    confirm: async (a) => {
+      calls.push(['confirm', a]);
+      return { id: a.id, tool: 'x.y', status: 'active', changed: true, conflict: false, inEffect: true };
+    },
+    cancel: async (a) => {
+      calls.push(['cancel', a]);
+      return { id: a.id, tool: 'x.y', status: 'removed', changed: true, conflict: false, inEffect: true };
+    },
+    remove: async (a) => {
+      calls.push(['remove', a]);
+      if (policy.remove) return policy.remove(a);
+      return { id: ID2, tool: a.tool, status: 'removed', changed: true, conflict: false, inEffect: true };
+    },
+  };
+  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, onError: (e) => errors.push(e) });
+  return { bot, sent, edits, answers, calls, errors };
+}
+
+const text = (chat, body, from = chat) => ({ update_id: 1, message: { message_id: 5, chat: { id: chat }, from: { id: from }, text: body } });
+const tap = (data, chat = FOUNDER, from = chat) => ({ update_id: 2, callback_query: { id: 'cb1', from: { id: from }, message: { message_id: 7, chat: { id: chat } }, data } });
+
+const buttonsOf = (msg) => (msg?.buttons ?? []).flat();
+const findButton = (msg, label) => buttonsOf(msg).find((b) => label.test(b.text));
+const everything = (h) => JSON.stringify([h.sent, h.edits, h.answers]);
+const names = (h) => h.calls.map((c) => c[0]);
+
+async function pushed(d = decision()) {
+  const h = harness();
+  await h.bot.pushCard(d);
+  return { h, msg: h.sent[0] };
+}
+
+async function noThrow(fn) {
+  try {
+    await fn();
+    return null;
+  } catch (err) {
+    if (err.constructor.name === 'PendingError') throw err;
+    return err;
+  }
+}
+
+const cases = [
+  // ---- Only the founder ----------------------------------------------------
+  {
+    id: 'a-message-from-another-chat-is-ignored',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(STRANGER, '/tools'));
+      await h.bot.handleUpdate(text(STRANGER, '/addtool a.b ask spend'));
+      return verdict(h.sent.length === 0 && h.calls.length === 0, `sent ${h.sent.length}, calls ${names(h)}`);
+    },
+  },
+  {
+    id: 'a-button-tap-from-another-chat-does-nothing',
+    async check() {
+      const { h, msg } = await pushed();
+      const approve = findButton(msg, /approve/i);
+      await h.bot.handleUpdate(tap(approve.data, STRANGER));
+      return verdict(h.calls.length === 0 && h.edits.length === 0, `calls ${names(h)}, edits ${h.edits.length}`);
+    },
+  },
+  {
+    id: 'the-sender-must-be-the-founder-even-in-the-founders-chat',
+    async check() {
+      const { h, msg } = await pushed();
+      await h.bot.handleUpdate(text(FOUNDER, '/tools', STRANGER));
+      await h.bot.handleUpdate(tap(findButton(msg, /approve/i).data, FOUNDER, STRANGER));
+      return verdict(h.calls.length === 0, `calls ${names(h)}`);
+    },
+  },
+  {
+    id: 'the-founder-chat-id-matches-as-a-string-or-a-number',
+    async check() {
+      const sent = [];
+      const api = { sendMessage: async (a) => (sent.push(a), { messageId: 1 }), editMessage: async () => {}, answerCallback: async () => {} };
+      const bot = loadSubject(BOT).createBot({ api, founderChatId: String(FOUNDER), decisions: {}, policyTools: { list: async () => [] } });
+      await bot.handleUpdate(text(FOUNDER, '/tools'));
+      return verdict(sent.length === 1, `sent ${sent.length}`);
+    },
+  },
+  {
+    id: 'garbage-updates-never-throw',
+    async check() {
+      const h = harness();
+      const bad = [null, undefined, 5, 'x', {}, { message: {} }, { message: { chat: {} } }, { callback_query: {} }, { callback_query: { data: 5 } }, { message: { chat: { id: FOUNDER }, from: { id: FOUNDER }, text: 7 } }];
+      for (const u of bad) {
+        const err = await noThrow(() => h.bot.handleUpdate(u));
+        if (err) return verdict(false, `threw on ${JSON.stringify(u)}: ${err.message}`);
+      }
+      return verdict(h.calls.length === 0, `calls ${names(h)}`);
+    },
+  },
+
+  // ---- Cards ---------------------------------------------------------------
+  {
+    id: 'a-card-goes-to-the-founder-chat-with-approve-and-reject-buttons',
+    async check() {
+      const { msg } = await pushed();
+      const ok = msg.chatId === FOUNDER && Boolean(findButton(msg, /approve/i)) && Boolean(findButton(msg, /reject/i));
+      return verdict(ok, JSON.stringify(msg));
+    },
+  },
+  {
+    id: 'the-card-text-shows-all-seven-fields-and-not-the-details',
+    async check() {
+      const { msg } = await pushed();
+      const t = msg.text;
+      const want = ['Pay the design agency', 'The invoice is due on Friday', 'The agency is paid', 'The agency pauses work', '₹8,000 ($96)', 'Medium', 'The amount is larger than usual', 'Approve it'];
+      const missing = want.filter((w) => !t.includes(w));
+      return verdict(missing.length === 0 && !t.includes('SECRET-DETAILS-TEXT'), `missing: ${missing.join(' | ')}; details shown: ${t.includes('SECRET-DETAILS-TEXT')}`);
+    },
+  },
+  {
+    id: 'button-data-fits-telegrams-64-byte-limit',
+    async check() {
+      const all = [(await pushed()).msg, (await pushed(unknownDecision())).msg].flatMap(buttonsOf);
+      const long = all.filter((b) => Buffer.byteLength(b.data) > 64);
+      return verdict(all.length > 0 && long.length === 0, `too long: ${long.map((b) => b.text).join(', ')}`);
+    },
+  },
+  {
+    id: 'a-card-that-is-not-pending-is-not-sent',
+    async check() {
+      const h = harness();
+      for (const status of ['approved', 'rejected', 'cancelled']) await h.bot.pushCard(decision({ status }));
+      return verdict(h.sent.length === 0, `sent ${h.sent.length}`);
+    },
+  },
+  {
+    id: 'a-reminder-says-it-is-a-reminder',
+    async check() {
+      const h = harness();
+      await h.bot.notifyReminder(decision());
+      return verdict(/^reminder/i.test(h.sent[0]?.text ?? '') && Boolean(findButton(h.sent[0], /approve/i)), JSON.stringify(h.sent[0]));
+    },
+  },
+  {
+    id: 'a-very-long-card-is-cut-below-telegrams-4096-character-limit',
+    async check() {
+      const long = decision();
+      long.card = { ...long.card, why_now: 'x'.repeat(6000) };
+      const { msg } = await pushed(long);
+      return verdict(msg.text.length <= 4096 && msg.text.includes('Pay the design agency'), `length ${msg.text.length}`);
+    },
+  },
+  {
+    id: 'every-message-is-plain-text-with-no-parse-mode',
+    async check() {
+      const h = harness();
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(text(FOUNDER, '/help'));
+      await h.bot.handleUpdate(text(FOUNDER, '/tools'));
+      const bad = h.sent.filter((m) => 'parseMode' in m || 'parse_mode' in m);
+      return verdict(h.sent.length >= 3 && bad.length === 0, `formatted messages: ${bad.length}`);
+    },
+  },
+
+  // ---- Taps resolve through the decisions service --------------------------
+  {
+    id: 'approve-tap-resolves-through-the-service-as-telegram',
+    async check() {
+      const { h, msg } = await pushed();
+      await h.bot.handleUpdate(tap(findButton(msg, /approve/i).data));
+      const r = h.calls.find((c) => c[0] === 'resolve');
+      return verdict(r && JSON.stringify(r[1]) === JSON.stringify({ id: ID, decision: 'approved', via: 'telegram' }), JSON.stringify(h.calls));
+    },
+  },
+  {
+    id: 'reject-tap-resolves-as-rejected',
+    async check() {
+      const { h, msg } = await pushed();
+      await h.bot.handleUpdate(tap(findButton(msg, /reject/i).data));
+      const r = h.calls.find((c) => c[0] === 'resolve');
+      return verdict(r && r[1].decision === 'rejected' && r[1].via === 'telegram' && r[1].id === ID, JSON.stringify(h.calls));
+    },
+  },
+  {
+    id: 'after-a-tap-the-message-shows-the-answer-and-loses-its-buttons',
+    async check() {
+      const { h, msg } = await pushed();
+      await h.bot.handleUpdate(tap(findButton(msg, /approve/i).data));
+      const e = h.edits[0];
+      const ok = e && e.chatId === FOUNDER && e.messageId === 7 && /approved/i.test(e.text) && buttonsOf(e).length === 0 && e.text.includes('Pay the design agency');
+      return verdict(ok, JSON.stringify(e));
+    },
+  },
+  {
+    id: 'a-tap-always-answers-the-callback-so-the-spinner-stops',
+    async check() {
+      const { h, msg } = await pushed();
+      await h.bot.handleUpdate(tap(findButton(msg, /approve/i).data));
+      return verdict(h.answers.length === 1 && h.answers[0].id === 'cb1', JSON.stringify(h.answers));
+    },
+  },
+  {
+    id: 'answered-elsewhere-first-is-reported-as-it-is-not-as-the-tap',
+    async check() {
+      const h = harness({ resolve: async (a) => ({ id: a.id, status: 'approved', changed: false, conflict: true }) });
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(tap(findButton(h.sent[0], /reject/i).data));
+      const shown = (h.edits[0]?.text ?? '') + (h.answers[0]?.text ?? '');
+      return verdict(/already/i.test(shown) && /approved/i.test(shown) && !/you rejected/i.test(shown), shown);
+    },
+  },
+  {
+    id: 'a-service-error-shows-a-safe-message-and-never-its-raw-text',
+    async check() {
+      const h = harness({ resolve: async () => Promise.reject(new Error(`insert failed for ${SECRET}`)) });
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(tap(findButton(h.sent[0], /approve/i).data));
+      return verdict(!everything(h).includes(SECRET) && h.answers.length === 1, everything(h));
+    },
+  },
+  {
+    id: 'a-decision-error-message-is-shown-because-it-is-written-for-the-founder',
+    async check() {
+      const h = harness({ resolve: async () => Promise.reject(new DecisionError('blocked', 'The system is paused, so nothing was changed.')) });
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(tap(findButton(h.sent[0], /approve/i).data));
+      return verdict(everything(h).includes('The system is paused'), everything(h));
+    },
+  },
+  {
+    id: 'bad-button-data-calls-nothing',
+    async check() {
+      const h = harness();
+      for (const data of ['', 'x', 'd:a:not-a-uuid', `d:z:${ID}`, `zz:a:${ID}`, `d:a:${ID}:extra`, 'd:a:', `ta:q:${ID}`, 'pc:nope', '\u0000']) {
+        const err = await noThrow(() => h.bot.handleUpdate(tap(data)));
+        if (err) return verdict(false, `threw on ${JSON.stringify(data)}: ${err.message}`);
+      }
+      return verdict(h.calls.length === 0, `calls ${names(h)}`);
+    },
+  },
+
+  {
+    id: 'if-editing-the-message-fails-after-an-answer-the-answer-is-still-reported',
+    async check() {
+      const h = harness({ editFails: true });
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(tap(findButton(h.sent[0], /approve/i).data));
+      const resolved = h.calls.filter((c) => c[0] === 'resolve').length;
+      const told = h.sent.slice(1).some((m) => /approved/i.test(m.text));
+      const lied = /something went wrong|nothing was changed/i.test(everything(h));
+      return verdict(resolved === 1 && told && !lied && h.errors.length >= 1, `resolved ${resolved}, told ${told}, lied ${lied}, errors ${h.errors.length}: ${everything(h)}`);
+    },
+  },
+  {
+    id: 'if-editing-the-message-fails-after-a-policy-confirm-the-change-is-still-reported',
+    async check() {
+      const h = harness({ editFails: true });
+      await h.bot.handleUpdate(text(FOUNDER, '/addtool crm.update routine write'));
+      await h.bot.handleUpdate(tap(findButton(h.sent[0], /^yes/i).data));
+      const told = h.sent.slice(1).some((m) => /now runs without asking/i.test(m.text));
+      return verdict(names(h).includes('confirm') && told && !/something went wrong/i.test(everything(h)), everything(h));
+    },
+  },
+  {
+    id: 'a-failing-callback-answer-after-a-change-is-reported-to-on-error-not-thrown',
+    async check() {
+      const h = harness({ answerFails: true });
+      await h.bot.pushCard(decision());
+      const err = await noThrow(() => h.bot.handleUpdate(tap(findButton(h.sent[0], /approve/i).data)));
+      const resolved = h.calls.filter((c) => c[0] === 'resolve').length;
+      return verdict(!err && resolved === 1 && h.edits.length === 1 && h.errors.length >= 1, `err ${err && err.message}, resolved ${resolved}, edits ${h.edits.length}, errors ${h.errors.length}`);
+    },
+  },
+
+  // ---- Policy table commands -----------------------------------------------
+  {
+    id: 'tools-lists-the-additions-and-says-when-there-are-none',
+    async check() {
+      const none = harness();
+      await none.bot.handleUpdate(text(FOUNDER, '/tools'));
+      const some = harness({ policy: { list: [{ id: ID, tool: 'crm.update', kind: 'routine', category: null, access: 'write', status: 'active' }, { id: ID2, tool: 'bank.pay', kind: 'ask', category: 'spend', access: null, status: 'active' }] } });
+      await some.bot.handleUpdate(text(FOUNDER, '/tools'));
+      const t = some.sent[0].text;
+      return verdict(none.sent[0].text.length > 0 && t.includes('crm.update') && t.includes('bank.pay'), `${none.sent[0].text} | ${t}`);
+    },
+  },
+  {
+    id: 'addtool-ask-is-active-at-once-and-says-so',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/addtool vendor.pay ask spend'));
+      const p = h.calls.find((c) => c[0] === 'propose');
+      const ok = p && JSON.stringify(p[1]) === JSON.stringify({ tool: 'vendor.pay', kind: 'ask', category: 'spend', via: 'telegram' }) && /vendor\.pay/.test(h.sent[0].text) && buttonsOf(h.sent[0]).length === 0;
+      return verdict(ok, JSON.stringify([h.calls, h.sent]));
+    },
+  },
+  {
+    id: 'addtool-category-words-map-to-the-policy-categories',
+    async check() {
+      const want = { spend: 'spend', people: 'people_or_contracts', launch: 'launch_or_pricing', legal: 'legal_or_public' };
+      for (const [word, category] of Object.entries(want)) {
+        const h = harness();
+        await h.bot.handleUpdate(text(FOUNDER, `/addtool a.b ask ${word}`));
+        const p = h.calls.find((c) => c[0] === 'propose');
+        if (!p || p[1].category !== category) return verdict(false, `${word} -> ${p && p[1].category}`);
+      }
+      return verdict(true);
+    },
+  },
+  {
+    id: 'addtool-routine-asks-for-a-yes-first-and-is-not-active-yet',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/addtool crm.update routine write'));
+      const p = h.calls.find((c) => c[0] === 'propose');
+      const msg = h.sent[0];
+      const ok = p && p[1].kind === 'routine' && p[1].access === 'write' && p[1].via === 'telegram' && Boolean(findButton(msg, /^yes/i)) && Boolean(findButton(msg, /^no/i)) && !names(h).includes('confirm');
+      return verdict(ok, JSON.stringify([h.calls, msg]));
+    },
+  },
+  {
+    id: 'only-the-yes-tap-confirms-and-no-cancels',
+    async check() {
+      const yes = harness();
+      await yes.bot.handleUpdate(text(FOUNDER, '/addtool crm.update routine write'));
+      await yes.bot.handleUpdate(tap(findButton(yes.sent[0], /^yes/i).data));
+      const no = harness();
+      await no.bot.handleUpdate(text(FOUNDER, '/addtool crm.update routine write'));
+      await no.bot.handleUpdate(tap(findButton(no.sent[0], /^no/i).data));
+      const c = yes.calls.find((x) => x[0] === 'confirm');
+      const n = no.calls.find((x) => x[0] === 'cancel');
+      const ok = c && c[1].id === ID2 && c[1].via === 'telegram' && n && n[1].id === ID2 && !names(no).includes('confirm') && !names(yes).includes('cancel');
+      return verdict(ok, JSON.stringify([yes.calls, no.calls]));
+    },
+  },
+  {
+    id: 'removetool-removes-and-says-so',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/removetool vendor.pay'));
+      const r = h.calls.find((c) => c[0] === 'remove');
+      return verdict(r && JSON.stringify(r[1]) === JSON.stringify({ tool: 'vendor.pay', via: 'telegram' }) && /vendor\.pay/.test(h.sent[0].text), JSON.stringify([h.calls, h.sent]));
+    },
+  },
+  {
+    id: 'badly-formed-policy-commands-get-help-and-call-nothing',
+    async check() {
+      const h = harness();
+      for (const body of ['/addtool', '/addtool a.b', '/addtool a.b ask', '/addtool a.b ask banana', '/addtool a.b routine', '/addtool a.b routine admin', '/addtool a.b maybe spend', '/addtool a.b ask spend extra', '/removetool', '/removetool a b']) {
+        await h.bot.handleUpdate(text(FOUNDER, body));
+      }
+      return verdict(h.calls.length === 0 && h.sent.length === 10, `calls ${names(h)}, replies ${h.sent.length}`);
+    },
+  },
+  {
+    id: 'a-policy-error-written-for-the-founder-is-shown-and-others-are-not',
+    async check() {
+      const safe = harness({ policy: { propose: async () => Promise.reject(new PolicyToolError('already_builtin', 'That tool is already covered by a built-in rule.')) } });
+      await safe.bot.handleUpdate(text(FOUNDER, '/addtool a.b ask spend'));
+      const raw = harness({ policy: { propose: async () => Promise.reject(new Error(`db down ${SECRET}`)) } });
+      await raw.bot.handleUpdate(text(FOUNDER, '/addtool a.b ask spend'));
+      return verdict(safe.sent[0].text.includes('built-in rule') && !everything(raw).includes(SECRET) && raw.sent.length === 1, `${safe.sent[0].text} | ${raw.sent[0] && raw.sent[0].text}`);
+    },
+  },
+
+  {
+    id: 'a-database-problem-gets-a-sentence-that-says-what-to-do',
+    async check() {
+      const want = { missing_table: /migration/i, unreachable: /reach the database/i, unauthorized: /\.env/ };
+      for (const [code, pattern] of Object.entries(want)) {
+        const h = harness({ policy: { list: async () => Promise.reject(new StoreError(code, `raw text ${SECRET}`)) } });
+        await h.bot.handleUpdate(text(FOUNDER, '/tools'));
+        const said = h.sent[0]?.text ?? '';
+        if (!pattern.test(said) || /something went wrong/i.test(said) || everything(h).includes(SECRET)) return verdict(false, `${code}: ${said}`);
+      }
+      return verdict(true);
+    },
+  },
+  {
+    id: 'an-unexpected-database-error-stays-generic-and-its-text-is-never-shown',
+    async check() {
+      for (const code of ['error', 'rejected', 'something_new']) {
+        const h = harness({ policy: { list: async () => Promise.reject(new StoreError(code, `detail ${SECRET}`)) } });
+        await h.bot.handleUpdate(text(FOUNDER, '/tools'));
+        if (!/something went wrong/i.test(h.sent[0]?.text ?? '') || everything(h).includes(SECRET)) return verdict(false, `${code}: ${h.sent[0]?.text}`);
+      }
+      return verdict(true);
+    },
+  },
+
+  // ---- "Add this tool" on unknown-tool cards --------------------------------
+  {
+    id: 'an-unknown-tool-card-offers-add-this-tool-buttons-and-others-do-not',
+    async check() {
+      const unknown = (await pushed(unknownDecision())).msg;
+      const normal = (await pushed(decision())).msg;
+      const offered = buttonsOf(unknown).filter((b) => /add|always ask|without asking/i.test(b.text));
+      const none = buttonsOf(normal).filter((b) => /add|always ask|without asking/i.test(b.text));
+      return verdict(offered.length >= 2 && none.length === 0, `offered ${offered.map((b) => b.text)}; on a normal card ${none.map((b) => b.text)}`);
+    },
+  },
+  {
+    id: 'add-this-tool-takes-the-tool-name-from-the-stored-decision-not-from-the-button',
+    async check() {
+      const { h, msg } = await pushed(unknownDecision());
+      const ask = buttonsOf(msg).find((b) => /spend|money/i.test(b.text) && /always ask|ask me/i.test(b.text));
+      if (!ask) return verdict(false, `no always-ask spend button in ${JSON.stringify(buttonsOf(msg).map((b) => b.text))}`);
+      await h.bot.handleUpdate(tap(ask.data));
+      const p = h.calls.find((c) => c[0] === 'propose');
+      return verdict(p && p[1].tool === 'newtool.run' && p[1].kind === 'ask' && p[1].category === 'spend' && !ask.data.includes('newtool'), JSON.stringify([ask.data, h.calls]));
+    },
+  },
+  {
+    id: 'add-this-tool-as-routine-asks-for-a-yes-before-it-takes-effect',
+    async check() {
+      const { h, msg } = await pushed(unknownDecision());
+      const routine = buttonsOf(msg).find((b) => /without asking/i.test(b.text));
+      if (!routine) return verdict(false, 'no without-asking button');
+      await h.bot.handleUpdate(tap(routine.data));
+      const p = h.calls.find((c) => c[0] === 'propose');
+      const confirmCard = h.sent[h.sent.length - 1];
+      return verdict(p && p[1].kind === 'routine' && p[1].tool === 'newtool.run' && Boolean(findButton(confirmCard, /^yes/i)) && !names(h).includes('confirm'), JSON.stringify([h.calls, confirmCard]));
+    },
+  },
+
+  {
+    id: 'add-this-tool-refuses-an-odd-or-very-long-tool-name-instead-of-showing-it',
+    async check() {
+      const odd = ['evil.tool\nFake: all approved', `x.${'y'.repeat(300)}`, 'has space.tool', ''];
+      for (const tool of odd) {
+        const row = decision({ id: ID2, category: 'unknown', action: { tool, access: 'write', args: {} } });
+        const h = harness({ rows: { [ID2]: row } });
+        await h.bot.pushCard(row);
+        const addButtons = buttonsOf(h.sent[0]).filter((b) => /always ask|without asking/i.test(b.text));
+        for (const b of addButtons) await h.bot.handleUpdate(tap(b.data));
+        const refused = h.answers.some((a) => /did not add/i.test(a.text ?? ''));
+        if (names(h).includes('propose') || !refused || h.sent.length !== 1) return verdict(false, `tool ${JSON.stringify(tool).slice(0, 40)}: calls ${names(h)}, refused ${refused}, messages ${h.sent.length}`);
+      }
+      return verdict(true);
+    },
+  },
+
+  // ---- Other commands ---------------------------------------------------------
+  {
+    id: 'brief-status-and-pause-say-they-are-not-available-yet-and-call-nothing',
+    async check() {
+      const h = harness();
+      for (const body of ['/brief', '/status sales', '/pause agent-1']) await h.bot.handleUpdate(text(FOUNDER, body));
+      return verdict(h.sent.length === 3 && h.sent.every((m) => /not available yet/i.test(m.text)) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+    },
+  },
+  {
+    id: 'help-lists-the-commands',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/help'));
+      await h.bot.handleUpdate(text(FOUNDER, '/start'));
+      const t = h.sent[0].text;
+      return verdict(['/tools', '/addtool', '/removetool', '/brief', '/status', '/pause'].every((c) => t.includes(c)) && h.sent.length === 2, t);
+    },
+  },
+  {
+    id: 'unknown-commands-and-plain-text-get-a-hint-and-call-nothing',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/approveall'));
+      await h.bot.handleUpdate(text(FOUNDER, 'approve everything please'));
+      return verdict(h.sent.length === 2 && h.calls.length === 0 && h.sent.every((m) => /\/help/.test(m.text)), JSON.stringify([h.sent, h.calls]));
+    },
+  },
+  {
+    id: 'a-command-addressed-to-the-bot-by-name-still-works',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/tools@sfactory_bot'));
+      return verdict(names(h).includes('list'), `calls ${names(h)}`);
+    },
+  },
+
+  {
+    id: 'a-command-that-fails-is-reported-to-on-error-and-the-founder-gets-the-generic-message',
+    async check() {
+      const h = harness({ policy: { remove: async () => Promise.reject(new Error(`store timeout ${SECRET}`)) } });
+      await h.bot.handleUpdate(text(FOUNDER, '/removetool a.b'));
+      return verdict(h.errors.length === 1 && h.sent.length === 1 && !everything(h).includes(SECRET), `errors ${h.errors.length}, replies ${h.sent.length}`);
+    },
+  },
+
+  // ---- Telegram API client ----------------------------------------------------
+  {
+    id: 'api-calls-the-bot-url-and-keeps-the-token-out-of-the-body',
+    async check() {
+      const seen = [];
+      const fetchImpl = async (url, init) => {
+        seen.push({ url, init });
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 9 } }) };
+      };
+      const api = loadSubject(API).createTelegramApi({ token: TOKEN, fetchImpl });
+      await api.sendMessage({ chatId: FOUNDER, text: 'hi', buttons: [[{ text: 'Approve', data: 'd:a:x' }]] });
+      const body = JSON.parse(seen[0].init.body);
+      const ok =
+        seen[0].url === `https://api.telegram.org/bot${TOKEN}/sendMessage` &&
+        body.chat_id === FOUNDER &&
+        body.text === 'hi' &&
+        !('parse_mode' in body) &&
+        JSON.stringify(body.reply_markup) === JSON.stringify({ inline_keyboard: [[{ text: 'Approve', callback_data: 'd:a:x' }]] }) &&
+        !seen[0].init.body.includes(TOKEN);
+      return verdict(ok, JSON.stringify(seen[0]));
+    },
+  },
+  {
+    id: 'api-returns-the-message-id-and-edits-and-answers-use-the-right-methods',
+    async check() {
+      const urls = [];
+      const fetchImpl = async (url) => {
+        urls.push(url);
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 9 } }) };
+      };
+      const api = loadSubject(API).createTelegramApi({ token: TOKEN, fetchImpl });
+      const sent = await api.sendMessage({ chatId: 1, text: 'x' });
+      await api.editMessage({ chatId: 1, messageId: 9, text: 'y' });
+      await api.answerCallback({ id: 'cb', text: 'ok' });
+      const methods = urls.map((u) => u.split('/').pop());
+      return verdict(sent.messageId === 9 && methods.join(',') === 'sendMessage,editMessageText,answerCallbackQuery', `${sent.messageId} ${methods}`);
+    },
+  },
+  {
+    id: 'api-get-updates-sends-offset-and-timeout-and-returns-the-list',
+    async check() {
+      const seen = [];
+      const fetchImpl = async (url, init) => {
+        seen.push(JSON.parse(init.body));
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [{ update_id: 7 }] }) };
+      };
+      const api = loadSubject(API).createTelegramApi({ token: TOKEN, fetchImpl });
+      const updates = await api.getUpdates({ offset: 8, timeout: 25 });
+      return verdict(seen[0].offset === 8 && seen[0].timeout === 25 && updates.length === 1 && updates[0].update_id === 7, JSON.stringify([seen, updates]));
+    },
+  },
+  {
+    id: 'api-errors-never-contain-the-token',
+    async check() {
+      const leaky = async () => {
+        throw new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`);
+      };
+      const bad = async () => ({ ok: false, status: 401, json: async () => ({ ok: false, description: `Unauthorized ${TOKEN}` }) });
+      const refused = async () => ({ ok: true, status: 200, json: async () => ({ ok: false, description: `Bad Request ${TOKEN}` }) });
+      const errs = [];
+      for (const fetchImpl of [leaky, bad, refused]) {
+        const api = loadSubject(API).createTelegramApi({ token: TOKEN, fetchImpl });
+        errs.push(await noThrow(() => api.sendMessage({ chatId: 1, text: 'x' })));
+      }
+      return verdict(errs.every((e) => e && !e.message.includes(TOKEN) && !String(e.stack).includes(TOKEN)), errs.map((e) => e && e.message).join(' | '));
+    },
+  },
+  {
+    id: 'api-without-a-token-refuses-before-any-request',
+    async check() {
+      let n = 0;
+      const fetchImpl = async () => {
+        n += 1;
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) };
+      };
+      const errs = [];
+      for (const token of [undefined, '', '  ']) {
+        const api = loadSubject(API).createTelegramApi({ token, fetchImpl });
+        errs.push(await noThrow(() => api.getUpdates({ offset: 0, timeout: 0 })));
+      }
+      return verdict(errs.every(Boolean) && n === 0, `requests ${n}`);
+    },
+  },
+
+  // ---- Poller ------------------------------------------------------------------
+  {
+    id: 'poller-handles-updates-in-order-and-moves-the-offset-past-them',
+    async check() {
+      const polls = [];
+      const handled = [];
+      const batches = [[{ update_id: 10 }, { update_id: 11 }], []];
+      const api = { getUpdates: async (a) => (polls.push(a.offset), batches.shift() ?? []) };
+      const poller = loadSubject(POLLER).createPoller({ api, handle: async (u) => handled.push(u.update_id), sleep: async () => {}, onError: () => {} });
+      await poller.runOnce();
+      await poller.runOnce();
+      return verdict(handled.join(',') === '10,11' && polls[1] === 12, `handled ${handled}, offsets ${polls}`);
+    },
+  },
+  {
+    id: 'poller-a-handler-that-throws-does-not-stop-it-or-repeat-the-update',
+    async check() {
+      const polls = [];
+      const handled = [];
+      const errors = [];
+      const batches = [[{ update_id: 1 }, { update_id: 2 }], []];
+      const api = { getUpdates: async (a) => (polls.push(a.offset), batches.shift() ?? []) };
+      const handle = async (u) => {
+        handled.push(u.update_id);
+        if (u.update_id === 1) throw new Error(`boom ${SECRET}`);
+      };
+      const poller = loadSubject(POLLER).createPoller({ api, handle, sleep: async () => {}, onError: (e) => errors.push(e) });
+      await poller.runOnce();
+      await poller.runOnce();
+      return verdict(handled.join(',') === '1,2' && polls[1] === 3 && errors.length === 1, `handled ${handled}, offsets ${polls}, errors ${errors.length}`);
+    },
+  },
+  {
+    id: 'poller-a-failed-poll-waits-longer-each-time-then-recovers',
+    async check() {
+      const sleeps = [];
+      let n = 0;
+      const api = {
+        getUpdates: async () => {
+          n += 1;
+          if (n <= 3) throw new Error('network down');
+          return [];
+        },
+      };
+      const poller = loadSubject(POLLER).createPoller({ api, handle: async () => {}, sleep: async (ms) => sleeps.push(ms), onError: () => {} });
+      for (let i = 0; i < 4; i += 1) await poller.runOnce();
+      const grows = sleeps.length === 3 && sleeps[1] > sleeps[0] && sleeps[2] > sleeps[1];
+      return verdict(grows && n === 4, `sleeps ${sleeps}`);
+    },
+  },
+  {
+    id: 'poller-stop-ends-the-loop',
+    async check() {
+      let polls = 0;
+      let poller;
+      const api = {
+        getUpdates: async () => {
+          polls += 1;
+          if (polls === 3) poller.stop();
+          return [];
+        },
+      };
+      poller = loadSubject(POLLER).createPoller({ api, handle: async () => {}, sleep: async () => {}, onError: () => {} });
+      await poller.start();
+      return verdict(polls === 3, `polls ${polls}`);
+    },
+  },
+  {
+    id: 'poller-start-skips-what-piled-up-while-the-app-was-closed',
+    async check() {
+      const polls = [];
+      const handled = [];
+      let poller;
+      const api = {
+        getUpdates: async (a) => {
+          polls.push(a);
+          if (polls.length === 1) return [{ update_id: 50 }];
+          poller.stop();
+          return [];
+        },
+      };
+      poller = loadSubject(POLLER).createPoller({ api, handle: async (u) => handled.push(u.update_id), sleep: async () => {}, onError: () => {} });
+      await poller.start();
+      return verdict(polls[0].offset === -1 && handled.length === 0 && polls[1].offset === 51, `offsets ${polls.map((p) => p.offset)}, handled ${handled}`);
+    },
+  },
+  {
+    id: 'poller-updates-that-arrive-after-stop-are-not-handled',
+    async check() {
+      let calls = 0;
+      const handled = [];
+      let poller;
+      const api = {
+        getUpdates: async () => {
+          calls += 1;
+          if (calls === 1) return [];
+          poller.stop();
+          return [{ update_id: 9 }, { update_id: 10 }];
+        },
+      };
+      poller = loadSubject(POLLER).createPoller({ api, handle: async (u) => handled.push(u.update_id), sleep: async () => {}, onError: () => {} });
+      await poller.start();
+      return verdict(handled.length === 0, `handled after stop: ${handled}`);
+    },
+  },
+  {
+    id: 'poller-starting-twice-runs-one-loop',
+    async check() {
+      let inFlight = 0;
+      let peak = 0;
+      let calls = 0;
+      let poller;
+      const api = {
+        getUpdates: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          calls += 1;
+          await new Promise((resolve) => setImmediate(resolve));
+          inFlight -= 1;
+          if (calls === 4) poller.stop();
+          return [];
+        },
+      };
+      poller = loadSubject(POLLER).createPoller({ api, handle: async () => {}, sleep: async () => {}, onError: () => {} });
+      await Promise.all([poller.start(), poller.start()]);
+      return verdict(peak === 1 && calls === 4, `most polls at once ${peak}, polls ${calls}`);
+    },
+  },
+];
+
+module.exports = {
+  name: 'telegram-bot',
+  description: 'Telegram bot: founder-only access, cards with buttons, taps through the decisions service, policy-table commands, API client, long-poll loop',
+  threshold: 1,
+  cases: () => cases,
+  run: (c) => c.check(),
+};

@@ -10,6 +10,11 @@ const { registerCommands } = require('./commands');
 const { createRestStore } = require('./store/rest');
 const { createDecisionService } = require('./decisions');
 const { createPolicyTools } = require('./policy-tools');
+const { createRouter } = require('./router');
+const { buildProviders } = require('./providers');
+const { createTelegramService, telegramProblem } = require('./telegram');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Build the runtime from an environment object.
@@ -26,7 +31,7 @@ function createApp({ env, fetchImpl, version }) {
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -45,11 +50,37 @@ function createApp({ env, fetchImpl, version }) {
   const decisions = createDecisionService({ store, audit, emit, isBlocked, policy: policyTools.policy });
   registerCommands(runtime, { store, version, decisions });
 
+  // The model router: Groq (once its key is set), then local Ollama, then Claude Code. Every attempt is
+  // written to the audit log before it is made, and if that write fails no model is called. Like the
+  // decisions service it is for trusted code (the orchestrator, step 1.7); agents never get it directly.
+  const router = createRouter({
+    providers: buildProviders({ env, fetchImpl }),
+    audit: ({ action, ...detail }) => audit.append({ actorType: 'system', action, detail }),
+    sleep,
+  });
+
+  // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
+  // with the runtime and never starts on a blocked one. Its errors reach the window as a bare event
+  // with no details, because an error message from a network call can hold a token.
+  const telegram = createTelegramService({
+    env,
+    decisions,
+    policyTools,
+    runtime,
+    store,
+    fetchImpl,
+    sleep,
+    onError: () => runtime.emit('telegram.error', {}),
+  });
+  const telegramIssue = telegramProblem(env); // a setting that is wrong must be said, not silently ignored
+
   return {
     runtime,
     store,
     decisions,
     policyTools,
+    router,
+    telegram,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -64,6 +95,8 @@ function createApp({ env, fetchImpl, version }) {
           runtime.emit('policy.degraded', { code: typeof err?.code === 'string' && /^[a-z_]+$/.test(err.code) ? err.code : 'error' });
         }
         runtime.emit('runtime.ready', {});
+        if (telegramIssue) runtime.emit('telegram.problem', { message: telegramIssue });
+        telegram?.start();
         return { ok: true };
       } catch (err) {
         const code = err?.cause?.code ?? 'error';
@@ -74,6 +107,7 @@ function createApp({ env, fetchImpl, version }) {
     },
 
     async stop() {
+      telegram?.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });
