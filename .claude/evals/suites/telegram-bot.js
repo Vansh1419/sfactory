@@ -34,6 +34,7 @@ const SECRET = 'sb_secret_ABCDEFGHIJKLMNOP';
 const TOKEN = '123456789:AAEXAMPLEEXAMPLEEXAMPLEEXAMPLE12345';
 
 const verdict = (pass, detail) => (pass ? { pass: true } : { pass: false, detail });
+const json = (value) => JSON.stringify(value);
 
 class DecisionError extends Error {
   constructor(code, message) {
@@ -80,7 +81,7 @@ const decision = (over = {}) => ({
 const unknownDecision = () => decision({ id: ID2, category: 'unknown', action: { tool: 'newtool.run', access: 'write', args: {} } });
 
 /** Bot plus fakes that record everything. */
-function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false } = {}) {
+function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false, orchestrator } = {}) {
   const sent = [];
   const edits = [];
   const answers = [];
@@ -136,12 +137,30 @@ function harness({ resolve, policy = {}, rows, editFails = false, answerFails = 
       return { id: ID2, tool: a.tool, status: 'removed', changed: true, conflict: false, inEffect: true };
     },
   };
-  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, onError: (e) => errors.push(e) });
+  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, orchestrator, onError: (e) => errors.push(e) });
   return { bot, sent, edits, answers, calls, errors };
 }
 
 const text = (chat, body, from = chat) => ({ update_id: 1, message: { message_id: 5, chat: { id: chat }, from: { id: from }, text: body } });
 const tap = (data, chat = FOUNDER, from = chat) => ({ update_id: 2, callback_query: { id: 'cb1', from: { id: from }, message: { message_id: 7, chat: { id: chat } }, data } });
+
+/** An orchestrator whose runs finish only when the test says so, so "the bot does not wait" can be seen. */
+function controllableOrchestrator({ throws = false } = {}) {
+  const calls = [];
+  const pending = [];
+  return {
+    calls,
+    pending,
+    submitGoal: async (request) => {
+      calls.push(request);
+      if (throws) throw new Error(`model down ${SECRET}`);
+      return new Promise((resolve) => pending.push(resolve));
+    },
+    finish: (i, result) => pending[i](result),
+  };
+}
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+const RUN_WAITING = { threadId: 't', status: 'waiting', waitingFor: ID, results: [], log: ['Planned 2 tasks.', 'Draft the note: done', 'Buy the domain: waiting for your decision.'] };
 
 const buttonsOf = (msg) => (msg?.buttons ?? []).flat();
 const findButton = (msg, label) => buttonsOf(msg).find((b) => label.test(b.text));
@@ -555,6 +574,161 @@ const cases = [
         if (names(h).includes('propose') || !refused || h.sent.length !== 1) return verdict(false, `tool ${JSON.stringify(tool).slice(0, 40)}: calls ${names(h)}, refused ${refused}, messages ${h.sent.length}`);
       }
       return verdict(true);
+    },
+  },
+
+  // ---- /goal ------------------------------------------------------------------------
+  {
+    id: 'goal-passes-the-text-to-the-orchestrator-and-the-bot-says-it-is-working',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Buy a domain for the landing page'));
+      const ok = o.calls.length === 1 && o.calls[0].goal === 'Buy a domain for the landing page' && h.sent.length === 1 && /working on it/i.test(h.sent[0].text);
+      return verdict(ok, json({ calls: o.calls, sent: h.sent.map((m) => m.text) }));
+    },
+  },
+  {
+    id: 'the-bot-keeps-answering-while-a-goal-is-being-planned',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Plan the launch'));
+      // The run is still going. A tap and a command must be handled now, not after it.
+      await h.bot.pushCard(decision());
+      await h.bot.handleUpdate(tap(findButton(h.sent[1], /approve/i).data));
+      await h.bot.handleUpdate(text(FOUNDER, '/tools'));
+      const answeredMeanwhile = h.calls.some((c) => c[0] === 'resolve') && names(h).includes('list');
+      o.finish(0, RUN_WAITING);
+      await tick();
+      return verdict(answeredMeanwhile && h.sent.some((m) => /waiting for your decision/i.test(m.text)), json({ calls: names(h), sent: h.sent.length }));
+    },
+  },
+  {
+    id: 'a-run-that-is-waiting-is-reported-with-what-was-done-so-far',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Plan the launch'));
+      o.finish(0, RUN_WAITING);
+      await tick();
+      const t = h.sent[h.sent.length - 1].text;
+      return verdict(/waiting for your decision/i.test(t) && t.includes('Draft the note: done') && t.includes('Planned 2 tasks.'), t);
+    },
+  },
+  {
+    id: 'a-finished-run-is-reported',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Plan the launch'));
+      o.finish(0, { threadId: 't', status: 'done', waitingFor: null, results: [], log: ['Planned 1 task.', 'Draft the note: done'] });
+      await tick();
+      const t = h.sent[h.sent.length - 1].text;
+      return verdict(/finished/i.test(t) && t.includes('Draft the note: done'), t);
+    },
+  },
+  {
+    id: 'a-run-that-could-not-start-shows-its-plain-message',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Make me a sandwich'));
+      o.finish(0, { threadId: null, status: 'failed', reason: 'nothing_to_do', message: 'There is nothing I can do for this goal with the tools I have right now, so nothing was started.', results: [], log: [] });
+      await tick();
+      return verdict(/nothing I can do/i.test(h.sent[h.sent.length - 1].text), h.sent[h.sent.length - 1].text);
+    },
+  },
+  {
+    id: 'goal-without-text-gets-usage-and-calls-nothing',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal'));
+      await h.bot.handleUpdate(text(FOUNDER, '/goal    '));
+      return verdict(o.calls.length === 0 && h.sent.length === 2 && h.sent.every((m) => /\/goal </.test(m.text)), json(h.sent.map((m) => m.text)));
+    },
+  },
+  {
+    id: 'a-goal-over-2000-characters-is-refused-and-calls-nothing',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, `/goal ${'x'.repeat(2001)}`));
+      return verdict(o.calls.length === 0 && /too long/i.test(h.sent[0]?.text ?? ''), json({ calls: o.calls.length, sent: h.sent.map((m) => m.text) }));
+    },
+  },
+  {
+    id: 'only-the-founder-can-send-a-goal',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(STRANGER, '/goal Delete everything'));
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Delete everything', STRANGER));
+      return verdict(o.calls.length === 0 && h.sent.length === 0, json({ calls: o.calls.length, sent: h.sent.length }));
+    },
+  },
+  {
+    id: 'at-most-three-goals-run-at-once',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      for (const g of ['one', 'two', 'three', 'four']) await h.bot.handleUpdate(text(FOUNDER, `/goal ${g}`));
+      const refused = /already working|too many|wait/i.test(h.sent[3]?.text ?? '');
+      o.finish(0, RUN_WAITING);
+      await tick();
+      await h.bot.handleUpdate(text(FOUNDER, '/goal five'));
+      return verdict(o.calls.length === 4 && refused && o.calls[3].goal === 'five', json({ calls: o.calls.map((c) => c.goal), fourth: h.sent[3]?.text }));
+    },
+  },
+  {
+    id: 'a-failing-orchestrator-gives-the-generic-message-reports-to-on-error-and-frees-its-slot',
+    async check() {
+      const o = controllableOrchestrator({ throws: true });
+      const h = harness({ orchestrator: o });
+      for (const g of ['a', 'b', 'c', 'd', 'e']) {
+        await h.bot.handleUpdate(text(FOUNDER, `/goal ${g}`));
+        await tick();
+      }
+      const ok = o.calls.length === 5 && h.errors.length === 5 && !everything(h).includes(SECRET) && h.sent.some((m) => /something went wrong/i.test(m.text));
+      return verdict(ok, json({ calls: o.calls.length, errors: h.errors.length }));
+    },
+  },
+  {
+    id: 'a-long-result-is-cut-below-telegrams-limit-and-stays-plain',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Plan'));
+      o.finish(0, { ...RUN_WAITING, log: Array.from({ length: 200 }, (_, i) => `Task ${i}: ${'x'.repeat(400)}`) });
+      await tick();
+      const last = h.sent[h.sent.length - 1];
+      return verdict(last.text.length <= 4096 && !('parseMode' in last) && !('parse_mode' in last), `length ${last.text.length}`);
+    },
+  },
+  {
+    id: 'without-an-orchestrator-goal-says-it-is-not-available',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/goal Plan the launch'));
+      return verdict(h.sent.length === 1 && /not available/i.test(h.sent[0].text) && h.errors.length === 0, json(h.sent.map((m) => m.text)));
+    },
+  },
+  {
+    id: 'the-goal-keeps-its-line-breaks-and-the-bot-name-suffix-is-ignored',
+    async check() {
+      const o = controllableOrchestrator();
+      const h = harness({ orchestrator: o });
+      await h.bot.handleUpdate(text(FOUNDER, '/goal@sfactory_bot Buy a domain\nand draft a launch note'));
+      return verdict(o.calls.length === 1 && o.calls[0].goal === 'Buy a domain\nand draft a launch note', json(o.calls));
+    },
+  },
+  {
+    id: 'help-lists-the-goal-command',
+    async check() {
+      const h = harness();
+      await h.bot.handleUpdate(text(FOUNDER, '/help'));
+      return verdict(/\/goal/.test(h.sent[0].text), h.sent[0].text);
     },
   },
 

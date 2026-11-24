@@ -62,21 +62,6 @@ function createApp({ env, fetchImpl, version }) {
     sleep,
   });
 
-  // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
-  // with the runtime and never starts on a blocked one. Its errors reach the window as a bare event
-  // with no details, because an error message from a network call can hold a token.
-  const telegram = createTelegramService({
-    env,
-    decisions,
-    policyTools,
-    runtime,
-    store,
-    fetchImpl,
-    sleep,
-    onError: () => runtime.emit('telegram.error', {}),
-  });
-  const telegramIssue = telegramProblem(env); // a setting that is wrong must be said, not silently ignored
-
   // The orchestrator: plans a goal, runs routine actions, and pauses on a card for anything that needs the
   // founder. It finds a run again from its card, so an answer from Telegram or the dashboard resumes it,
   // and runs waiting when the app was closed are resumed on start. The planner and the card writer are written
@@ -97,6 +82,23 @@ function createApp({ env, fetchImpl, version }) {
     runTool: notConnected('Tool loading'),
     onError: () => runtime.emit('orchestrator.error', {}),
   });
+
+  // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
+  // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
+  // Its errors reach the window as a bare event with no details, because an error message from a
+  // network call can hold a token. It is built after the orchestrator, which it hands goals to.
+  const telegram = createTelegramService({
+    env,
+    decisions,
+    policyTools,
+    orchestrator,
+    runtime,
+    store,
+    fetchImpl,
+    sleep,
+    onError: () => runtime.emit('telegram.error', {}),
+  });
+  const telegramIssue = telegramProblem(env); // a setting that is wrong must be said, not silently ignored
 
   return {
     runtime,

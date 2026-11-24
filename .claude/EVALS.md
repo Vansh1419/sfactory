@@ -15,6 +15,8 @@ Evals are written before the code they grade (see `PLAN.md`, step 0.4). Code: `.
 
 Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 
+A case that has not finished after 60 seconds **fails** with "timed out". Before this (found on Nov 24, 2026 while checking the `/goal` cases) a case that never settled made the runner exit with status 0 and print nothing, which a script reads as a pass.
+
 ## Status meanings
 
 | Status | Meaning |
@@ -33,7 +35,7 @@ Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
-| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 54 | 100% | 1.8 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 68 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 41 | 100% | 1.7c | pass |
@@ -173,9 +175,9 @@ Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; 
 
 Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
 
-**Cases:** 54
+**Cases:** 68
 
-Contract: `createBot({ api, founderChatId, decisions, policyTools, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
+Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
 
 | Group | Cases | What it checks |
 |---|---|---|
@@ -185,6 +187,7 @@ Contract: `createBot({ api, founderChatId, decisions, policyTools, onError? })` 
 | Policy commands | 8 | `/tools` lists additions; `/addtool <tool> ask <category>` is active at once; the category words map to the four policy categories; a routine addition asks Yes or No first, and only Yes confirms (No cancels); `/removetool` removes; badly formed commands get help and call nothing; a `PolicyToolError` is shown and other errors are not |
 | Add this tool | 4 | A tool name that is odd (newlines, spaces, over 100 characters, empty) is refused and never shown or proposed; an unknown-tool card offers the buttons and no other card does; the tool name comes from the stored decision, never from the button; the routine option asks for a Yes before it takes effect |
 | Other commands | 5 | A command that fails is reported to `onError` while the founder gets the generic sentence; `/brief`, `/status` and `/pause` say they are not available yet (their data arrives with later steps) and call nothing; `/help` and `/start` list the commands; unknown commands and plain text get a hint and call nothing; `/tools@botname` works |
+| Goals (`/goal`) | 14 | The text goes to the orchestrator exactly as typed (line breaks kept, a `@botname` suffix ignored) and the bot says it is working; **the bot keeps answering taps and commands while a goal is being planned** (it never waits for the run); the result comes as a second message, with what was done so far when the run is waiting on a decision, a summary when finished, and the run's own plain message when it could not start; no text gets usage, and a goal over 2000 characters is refused, each calling nothing; only the founder can send one; at most 3 run at once and a finished one frees its place; a failing orchestrator gives the generic sentence, reports to `onError` and frees its place; a very long result is cut below Telegram's limit and stays plain text; with no orchestrator the bot says goals are not available; `/help` lists `/goal` |
 | API client | 5 | Calls `https://api.telegram.org/bot<token>/<method>` with no token in the body and no parse mode; send, edit and answer use the right methods; `getUpdates` sends offset and timeout; no error message or stack ever holds the token; no token means no request |
 | Poller | 7 | On start it skips whatever piled up while the app was closed (so a restart cannot replay an old confirm or removal; a tap made while closed must be made again); updates that arrive after `stop()` are not handled; starting twice runs one loop; updates are handled in order and the offset moves past them; a handler that throws neither stops the loop nor repeats the update; a failed poll waits longer each time and then recovers; `stop()` ends the loop |
 

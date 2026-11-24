@@ -155,6 +155,30 @@ test('a group chat id (negative) is refused', () => {
   assert.equal(setup({ env: { ...ENV, TELEGRAM_FOUNDER_CHAT_ID: '-1001234567890' } }).service, null);
 });
 
+test('a /goal from the founder is handed to the orchestrator', async () => {
+  const goals = [];
+  const orchestrator = {
+    submitGoal: async (request) => {
+      goals.push(request);
+      return { status: 'done', log: ['Planned 1 task.'] };
+    },
+  };
+  const { service, requests } = setup({ orchestrator });
+  await service.bot.handleUpdate({ message: { chat: { id: 4242 }, from: { id: 4242 }, text: '/goal Buy a domain' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(goals, [{ goal: 'Buy a domain' }]);
+  assert.ok(requests.filter((r) => r.method === 'sendMessage').length >= 2); // "working on it", then the result
+});
+
+test('without an orchestrator /goal says goals are not available and nothing breaks', async () => {
+  const { service, requests } = setup();
+  await service.bot.handleUpdate({ message: { chat: { id: 4242 }, from: { id: 4242 }, text: '/goal Buy a domain' } });
+  const sent = requests.filter((r) => r.method === 'sendMessage');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].body.text, /not available/i);
+});
+
 test('stop unsubscribes from new decisions', () => {
   const { service, listeners } = setup();
   service.start();

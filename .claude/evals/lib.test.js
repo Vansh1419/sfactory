@@ -35,6 +35,21 @@ test('PendingError marks cases pending, not failed', async () => {
   assert.equal(r.counts.fail, 0);
 });
 
+test('a case that never finishes fails with a timeout instead of ending the run silently', async () => {
+  const never = () => new Promise(() => {});
+  const r = await runSuite(suiteOf([{ id: 'hangs' }, { id: 'fine' }], (c) => (c.id === 'hangs' ? never() : { pass: true })), { caseTimeoutMs: 50 });
+  assert.equal(r.status, 'fail');
+  assert.equal(r.counts.fail, 1);
+  assert.equal(r.counts.pass, 1);
+  assert.match(r.results.find((x) => x.id === 'hangs').detail, /timed out/i);
+});
+
+test('a case that finishes in time is not affected by the timeout', async () => {
+  const slowButFine = () => new Promise((resolve) => setTimeout(() => resolve({ pass: true }), 20));
+  const r = await runSuite(suiteOf([{ id: 'a' }], slowButFine), { caseTimeoutMs: 1000 });
+  assert.equal(r.status, 'pass');
+});
+
 test('any other thrown error is a failure', async () => {
   const r = await runSuite(
     suiteOf([{ id: 'a' }], () => {

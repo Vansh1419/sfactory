@@ -24,6 +24,18 @@ function loadSubject(relPath) {
   }
 }
 
+// A case that never settles must FAIL. Left alone it leaves nothing for Node to wait on, so the process
+// exits with status 0 and prints no report at all, which anything checking the exit code reads as a pass.
+const DEFAULT_CASE_TIMEOUT_MS = 60_000;
+
+function withTimeout(work, ms) {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms (the case never finished)`)), ms);
+  });
+  return Promise.race([Promise.resolve(work), timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * A suite is { name, description, threshold?, cases(), run(case) }.
  *   cases()   returns an array of objects with a unique `id`.
@@ -35,7 +47,7 @@ function loadSubject(relPath) {
  *   pending - nothing failed but some cases could not run yet
  *   pass    - every case ran and the pass rate met the threshold
  */
-async function runSuite(suite) {
+async function runSuite(suite, { caseTimeoutMs = DEFAULT_CASE_TIMEOUT_MS } = {}) {
   const cases = suite.cases();
   const threshold = suite.threshold ?? 1;
   const seen = new Set();
@@ -45,7 +57,7 @@ async function runSuite(suite) {
     if (seen.has(c.id)) throw new Error(`${suite.name}: duplicate case id "${c.id}"`);
     seen.add(c.id);
     try {
-      const out = await suite.run(c);
+      const out = await withTimeout(suite.run(c), caseTimeoutMs);
       results.push({ id: c.id, status: out.pass ? 'pass' : 'fail', detail: out.detail });
     } catch (err) {
       if (err instanceof PendingError) {

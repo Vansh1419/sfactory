@@ -45,6 +45,7 @@ const HELP = [
   '/addtool <tool> ask <spend|people|launch|legal> - always ask you first',
   '/addtool <tool> routine <read|write> - let it run without asking (needs your Yes)',
   '/removetool <tool> - remove a tool you added',
+  '/goal <what you want done> - give the team a goal',
   '/brief - morning brief (not available yet)',
   '/status <team> - team status (not available yet)',
   '/pause <agent> - pause an agent (not available yet)',
@@ -52,6 +53,23 @@ const HELP = [
 ].join('\n');
 
 const HINT = 'I did not understand that. Send /help to see what I can do.';
+
+// /goal. Planning takes a while (a model call or two), so a goal runs in the background and its result
+// arrives as a second message; the bot keeps answering taps and commands meanwhile. A few at a time at most,
+// so a burst of commands cannot flood the model.
+const MAX_GOAL_CHARS = 2000;
+const MAX_GOALS_AT_ONCE = 3;
+const MAX_LOG_LINE_CHARS = 300;
+const GOAL_USAGE = 'Usage: /goal <what you want done>\nFor example: /goal Buy a domain for the new landing page';
+
+/** The founder-facing summary of a run: fixed sentences plus the plan's own plain-text log lines. */
+function describeRun(result) {
+  if (!result || typeof result !== 'object') return 'The run stopped.';
+  if (result.status === 'failed') return clip(`I could not start that. ${typeof result.message === 'string' ? result.message : ''}`, 600);
+  const head = { waiting: 'The plan is under way and waiting for your decision (the card is in this chat).', done: 'Finished.' }[result.status] ?? 'The run stopped.';
+  const lines = (Array.isArray(result.log) ? result.log : []).filter((l) => typeof l === 'string').map((l) => `- ${clip(l, MAX_LOG_LINE_CHARS)}`);
+  return clip([head, ...lines].join('\n'), MAX_MESSAGE_CHARS);
+}
 const ADDTOOL_USAGE = 'Usage:\n/addtool <tool> ask <spend|people|launch|legal>\n/addtool <tool> routine <read|write>';
 const REMOVETOOL_USAGE = 'Usage:\n/removetool <tool>';
 
@@ -123,8 +141,10 @@ function parseData(data) {
 
 function parseCommand(text) {
   if (typeof text !== 'string' || !text.startsWith('/')) return null;
-  const [head, ...args] = text.trim().split(/\s+/);
-  return { cmd: head.slice(1).split('@')[0].toLowerCase(), args };
+  const trimmed = text.trim();
+  const [head, ...args] = trimmed.split(/\s+/);
+  // `rest` is everything after the command exactly as typed (a goal keeps its line breaks).
+  return { cmd: head.slice(1).split('@')[0].toLowerCase(), args, rest: trimmed.slice(head.length).trim() };
 }
 
 function describeRule(rule) {
@@ -135,7 +155,7 @@ function describeRule(rule) {
   return rule.status === 'proposed' ? `${base} - waiting for your Yes` : base;
 }
 
-function createBot({ api, founderChatId, decisions, policyTools, onError = () => {} }) {
+function createBot({ api, founderChatId, decisions, policyTools, orchestrator, onError = () => {} }) {
   const founder = Number(founderChatId);
   const reply = (text, buttons) => api.sendMessage({ chatId: founder, text, buttons });
   const toast = (callbackId, text) => api.answerCallback({ id: callbackId, text: clip(text, MAX_TOAST_CHARS) });
@@ -177,11 +197,43 @@ function createBot({ api, founderChatId, decisions, policyTools, onError = () =>
     return reply(ADDTOOL_USAGE);
   }
 
-  async function runCommand({ cmd, args }) {
+  // ---- goals ----------------------------------------------------------------------------
+
+  let goalsRunning = 0;
+
+  /** Runs in the background. It never rejects: a failure goes to onError and the founder gets a plain sentence. */
+  async function runGoal(goal) {
+    try {
+      await reply(describeRun(await orchestrator.submitGoal({ goal })));
+    } catch (err) {
+      onError(err);
+      try {
+        await reply(GENERIC_ERROR);
+      } catch (replyErr) {
+        onError(replyErr);
+      }
+    } finally {
+      goalsRunning -= 1;
+    }
+  }
+
+  async function startGoal(goal) {
+    if (!orchestrator) return reply('Goals are not available right now.');
+    if (goal === '') return reply(GOAL_USAGE);
+    if (goal.length > MAX_GOAL_CHARS) return reply(`That goal is too long. Please keep it under ${MAX_GOAL_CHARS} characters.`);
+    if (goalsRunning >= MAX_GOALS_AT_ONCE) return reply(`I am already working on ${MAX_GOALS_AT_ONCE} goals. Please wait for one to finish.`);
+    goalsRunning += 1;
+    runGoal(goal); // not awaited on purpose: planning takes a while, and taps must not wait behind it
+    return reply('Working on it. I will message you here when the plan is ready or needs you.');
+  }
+
+  async function runCommand({ cmd, args, rest }) {
     switch (cmd) {
       case 'start':
       case 'help':
         return reply(HELP);
+      case 'goal':
+        return startGoal(rest);
       case 'brief':
       case 'status':
       case 'pause':

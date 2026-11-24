@@ -42,14 +42,14 @@ function telegramProblem(env) {
 }
 
 /** Returns null when Telegram is not set up. `start()` begins work; `stop()` ends it. */
-function createTelegramService({ env, decisions, policyTools, runtime, store, fetchImpl, sleep, onError = () => {} }) {
+function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, onError = () => {} }) {
   if (telegramProblem(env) !== null) return null;
   const token = clean(env.TELEGRAM_BOT_TOKEN);
   const chatId = clean(env.TELEGRAM_FOUNDER_CHAT_ID);
   if (!token || !chatId) return null;
 
   const api = createTelegramApi({ token, fetchImpl });
-  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, onError });
+  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, onError });
   const poller = createPoller({ api, handle: bot.handleUpdate, sleep, onError });
 
   const delivered = new Set(); // ids of cards sent to the phone during this run
