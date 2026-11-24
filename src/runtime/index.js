@@ -14,6 +14,8 @@ const { createRouter } = require('./router');
 const { buildProviders } = require('./providers');
 const { createTelegramService, telegramProblem } = require('./telegram');
 const { createOrchestratorService } = require('./orchestrator/service');
+const { createModelPlanner, createModelCardWriter, buildToolCatalogue } = require('./orchestrator/model');
+const { listRules } = require('./policy');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -77,9 +79,10 @@ function createApp({ env, fetchImpl, version }) {
 
   // The orchestrator: plans a goal, runs routine actions, and pauses on a card for anything that needs the
   // founder. It finds a run again from its card, so an answer from Telegram or the dashboard resumes it,
-  // and runs waiting when the app was closed are resumed on start. The planner, the card writer and the
-  // tools are not connected yet (the model-written planner and card writer, then tool loading in step 1.10),
-  // so until then a goal fails cleanly at planning and no tool can run. The policy is the live one.
+  // and runs waiting when the app was closed are resumed on start. The planner and the card writer are written
+  // by a model through the router (the goal and the card facts may be seen by hosted providers, as the router's
+  // defaults allow; secrets in arguments are removed first). Tools are not connected yet (step 1.10), so a
+  // routine action that is planned fails as "not connected" and a spend still files its card. The policy is the live one.
   const notConnected = (what) => async () => {
     throw new Error(`${what} is not connected yet`);
   };
@@ -89,8 +92,8 @@ function createApp({ env, fetchImpl, version }) {
     decisions,
     policy: policyTools.policy,
     runtime,
-    planner: notConnected('The planner'),
-    writeCard: notConnected('The card writer'),
+    planner: createModelPlanner({ router, listTools: buildToolCatalogue({ rules: listRules, policyTools }) }),
+    writeCard: createModelCardWriter({ router }),
     runTool: notConnected('Tool loading'),
     onError: () => runtime.emit('orchestrator.error', {}),
   });

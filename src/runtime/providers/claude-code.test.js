@@ -76,6 +76,21 @@ test('call runs claude without a shell, in the temp folder, with a timeout', asy
   assert.ok(fs.existsSync(dir));
 });
 
+test('call closes the process input at once so claude does not wait for it', async () => {
+  let ended = false;
+  const run = (command, args, options, done) => {
+    done(null, OK_JSON);
+    return { stdin: { end: () => { ended = true; } } };
+  };
+  await createClaudeCodeCall({ env: {}, tmpDir: tmpFolder(), run })({ prompt: 'hi' });
+  assert.equal(ended, true);
+});
+
+test('call still works when the launcher returns no process object', async () => {
+  const { run } = fakeRun((done) => done(null, OK_JSON)); // fakeRun's launcher returns nothing
+  assert.equal((await createClaudeCodeCall({ env: {}, tmpDir: tmpFolder(), run })({ prompt: 'hi' })).text, 'OK');
+});
+
 test('call rejects when the process fails with no output', async () => {
   const { run } = fakeRun((done) => done(new Error('spawn claude ENOENT'), ''));
   await assert.rejects(createClaudeCodeCall({ env: {}, tmpDir: tmpFolder(), run })({ prompt: 'hi' }));

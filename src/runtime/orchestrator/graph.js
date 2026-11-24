@@ -40,6 +40,7 @@ const MESSAGES = Object.freeze({
   bad_request: 'The goal was not valid.',
   bad_plan: 'The plan was not usable, so nothing was started.',
   planner_failed: 'The plan could not be made, so nothing was started.',
+  nothing_to_do: 'There is nothing I can do for this goal with the tools I have right now, so nothing was started.',
   audit_failed: 'The run could not be recorded, so nothing was started.',
   already_exists: 'A run with that id already exists.',
   interrupted: 'The run stopped part-way and was not continued. An action may or may not have happened, so check before running it again.',
@@ -135,6 +136,8 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     } catch {
       return { failure: { reason: 'planner_failed' } };
     }
+    // An empty plan is the planner saying no tool fits the goal: that is an answer, not a broken plan.
+    if (Array.isArray(planned) && planned.length === 0) return { failure: { reason: 'nothing_to_do' } };
     const tasks = cleanPlan(planned);
     if (!tasks) return { failure: { reason: 'bad_plan' } };
     try {

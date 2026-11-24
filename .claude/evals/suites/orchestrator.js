@@ -416,7 +416,6 @@ const cases = [
       const plans = [
         null,
         'not a list',
-        [],
         Array.from({ length: 21 }, () => routine()),
         [{ action: { tool: 'docs.create_draft', access: 'write' } }],
         [{ title: 'No action' }],
@@ -431,6 +430,15 @@ const cases = [
         if (res.status !== 'failed' || res.reason !== 'bad_plan' || h.calls.created.length > 0 || ranTools(h).length > 0) return verdict(false, `plan ${json(plan).slice(0, 80)} -> ${json({ status: res.status, reason: res.reason })}`);
       }
       return verdict(true);
+    },
+  },
+  {
+    id: 'an-empty-plan-says-there-is-nothing-to-do-with-the-tools-available',
+    async check() {
+      const h = build({ planner: async () => [] });
+      const res = await h.orch.start({ goal: GOAL, threadId: thread('nothing') });
+      const ok = res.status === 'failed' && res.reason === 'nothing_to_do' && /nothing/i.test(res.message) && h.calls.created.length === 0 && ranTools(h).length === 0 && h.calls.audit.length === 0;
+      return verdict(ok, json({ status: res.status, reason: res.reason, message: res.message }));
     },
   },
   {

@@ -36,8 +36,9 @@ Results of the last run are in `.claude/evals/results/latest.json` (gitignored).
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 54 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
-| `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 40 | 100% | 1.7c | pass |
+| `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 41 | 100% | 1.7c | pass |
 | `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 16 | 100% | 1.7d | pass |
+| `orchestrator-model` | `src/runtime/orchestrator/model.js` (the model-written planner and card writer), with a scripted router | 26 | 100% | 1.7e | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 26 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
@@ -211,7 +212,7 @@ Judgment calls: deleting a thread is unsupported, so finished runs stay in the t
 
 Suite: `.claude/evals/suites/orchestrator.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/orchestrator/graph.js`, with 5 unit tests in `graph.test.js`. The planner, card writer and tool runner are passed in, so no model or real tool is involved. The policy is the REAL policy (`src/runtime/policy.js`); the decisions service is a small fake that files cards and lets a test answer them; one case uses the real checkpoint store over a real Postgres.
 
-**Cases:** 40
+**Cases:** 41
 
 Contract: `createOrchestrator({ planner, writeCard, runTool, decisions, policy, checkpointer, audit, emit? })` returns `start({ goal, threadId? })`, `resume({ threadId })` and `status({ threadId })`. Results are `{ threadId, status: 'waiting' | 'done' | 'failed' | 'unknown', waitingFor, reason?, results, log }`. The full contract, the outcomes and the failure reasons are in the header of the suite file.
 
@@ -222,7 +223,7 @@ Contract: `createOrchestrator({ planner, writeCard, runTool, decisions, policy, 
 | The unknown-tool rule | 1 | An approved decision for an unknown tool does **not** run the tool, and the log says to add it to the policy table first |
 | Failure behaviour | 6 | An event listener that throws does not break the run or file a second card; a tool that fails is recorded, never retried and never leaks (later tasks still run); a card that cannot be written, a card the decisions service rejects, a decision that cannot be filed, and a policy that throws each block that task and never run it (the policy fails closed) |
 | Audit | 6 | If the `orchestrator.waiting` entry cannot be written the card is cancelled and the task does not run; that entry links the decision to its run, which is how the app finds the run again; the run is audited at the start and before each tool runs; if the tool run cannot be audited the tool does not run; if the start cannot be audited nothing is planned, filed or run; the tool runner gets a stable idempotency key per task |
-| Planning input | 4 | A plan with unusable arguments (a function, a symbol, a bigint, a circular reference, over 10,000 characters, not a plain object) is a `bad_plan`, not a crash; a blank, non-text or oversized goal is refused before planning; a bad plan (not a list, empty, over 20 tasks, a missing title, tool or action, a bad access tag, a blank title) fails the run with nothing filed or run; a planner that throws fails the run and its error text is never shown |
+| Planning input | 5 | An empty plan (the planner saying no tool fits the goal) fails with `nothing_to_do` and a plain message, not "bad plan"; a plan with unusable arguments (a function, a symbol, a bigint, a circular reference, over 10,000 characters, not a plain object) is a `bad_plan`, not a crash; a blank, non-text or oversized goal is refused before planning; a bad plan (not a list, over 20 tasks, a missing title, tool or action, a bad access tag, a blank title) fails the run with nothing filed or run; a planner that throws fails the run and its error text is never shown |
 | Isolation and safety | 6 | Starting the same thread twice at once runs it once; a thread id that already exists is refused and left alone; two runs at once do not mix their decisions; a tool's output is never kept in the result or the log; `status` reports waiting, then done, with the log in order; events carry ids only, never the goal or card text |
 | Crashes | 3 | A crash right after a tool runs (the result never recorded), right after an **approved** tool runs, or right after a card is filed but before the run is saved: the run is reported `interrupted`, never continued, and the tool runs **at most once**; a run with a card that was never saved is `interrupted`, not "waiting" (added after the code review of Nov 24, 2026; the first two failed with the tool run twice before the fix) |
 | Real checkpoint store | 1 | A waiting run resumes through a **new orchestrator and a new saver over the same database**, as after an app restart |
@@ -232,6 +233,25 @@ Checked by mutation on Nov 24, 2026: 10 realistic mistakes were each introduced 
 Checked by mutation a second time on Nov 24, 2026, after the review fixes: 8 more mistakes (saves back to the background, an interrupted run called "waiting", the start id not reserved, events that can throw inside a step, arguments with functions dropped quietly, no size cap on arguments, a card left behind when it cannot be linked, the waiting entry never written). All 8 are caught. **Finding along the way:** LangGraph's default saves each step in the background, so when saving fails the run keeps going and runs later tools that are not being recorded; the orchestrator now runs with `durability: 'sync'` (each step is saved before the next starts).
 
 Judgment calls to confirm with the founder: a rejected or cancelled spend skips only that task and the rest of the plan still runs; a failed action is never retried automatically; a task whose card cannot be written is skipped, not run; a plan is capped at 20 tasks and a goal at 2000 characters; a run that stopped part-way is reported `interrupted` and left for you to re-plan, never continued automatically (a tool runs at most once). A known gap: if the app stops between filing a card and saving the run, that card stays pending but no run waits on it, so answering it does nothing (it never runs anything).
+
+### orchestrator-model
+
+Suite: `.claude/evals/suites/orchestrator-model.js`. No dataset. Code under test: `src/runtime/orchestrator/model.js`. **No model is called:** the router is a fake with scripted replies, so what is graded is everything around the model: what it is told, what it is not told, how its answer is read, and that a bad or hostile answer can only ever become an error.
+
+**Cases:** 26
+
+Contract: `createModelPlanner({ router, listTools })`, `createModelCardWriter({ router })` and `buildToolCatalogue({ rules, policyTools })`. Both model calls ask the strong tier with `sensitive: false` (hosted providers may see the goal and the card facts, as the router's defaults allow; secrets in arguments are removed first), and each call gets its own router task id.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Planner: what it is told | 3 | The strong tier, the goal and the tool list in the prompt (each tool shown with whether it always asks the founder); the goal is fenced as data with a fresh marker the goal cannot guess; a new router task id every call |
+| Planner: reading the answer | 10 | A clean JSON array becomes tasks keeping only title, tool, access and args; an array inside a code fence and chatter is still read; items already shaped with an `action` are accepted; claims of approval and any other extra field are dropped; an empty plan comes back empty (the graph then says "nothing to do"); anything that is not a JSON array is an error; a 150 KB answer is refused; a router failure or throw is an error with none of its text; a blank goal never reaches the model |
+| The tool list | 2 | Built-in tools plus the founder's ACTIVE additions only (a proposal not yet confirmed is left out); if the founder's table cannot be read the built-in tools are used |
+| Card writer | 11 | A good first draft becomes the card; the strong tier with the writer's instructions and the facts; a secret in the arguments never reaches the prompt; a draft the checker rejects is sent back with what was wrong and then accepted; a writer that never passes gives up after three tries with no card; an answer that is not JSON, or a failing router, counts as a try and never carries its text; extra fields such as `approved` never reach the card; a card for an unknown tool tells the model the tool is not in the policy table and that approving it does not run it; the request is fenced as data; a new router task id every call |
+
+Checked by mutation on Nov 24, 2026: 10 mistakes were introduced one at a time (approval claims kept, secrets in the prompt, a fixed fence marker, the router's message passed on, an unconfirmed tool offered, a single try, the unknown-tool warning dropped, a huge answer accepted, a blank goal reaching the model, the sensitive flag flipped). All 10 are caught.
+
+Checked live on Nov 24, 2026 (local stand-in database, Claude Code provider, no Telegram): the goal "Buy the domain mylaunch-demo.example" produced one `namecheap.purchase_domain` task, a card that passed the plain-language checker on the first try (it said the price was not given, rather than inventing one, and noted that `.example` names cannot be registered), a pause, and, after a rejection, a finished run. Judgment call to confirm: a card for a spend with no price shows the model's honest "price not confirmed" in the cost field, with an example figure in brackets; the checker requires rupee and dollar numbers there.
 
 ### orchestrator-service
 

@@ -80,11 +80,13 @@ function createClaudeCodeCall({ env = process.env, tmpDir = DEFAULT_TMP_DIR, run
     const { command, args, cwd, env: childEnv } = buildInvocation({ prompt, env, tmpDir });
 
     const stdout = await new Promise((resolve, reject) => {
-      run(command, args, { cwd, env: childEnv, timeout: CALL_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES }, (err, out) => {
+      const child = run(command, args, { cwd, env: childEnv, timeout: CALL_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES }, (err, out) => {
         // A non-zero exit still prints a JSON error result, so parse it before giving up.
         if (err && !out) reject(err);
         else resolve(out);
       });
+      // The prompt is an argument, not input. Left open, claude waits about 3 seconds for stdin on every call.
+      child?.stdin?.end();
     });
 
     const result = parseResult(stdout);
