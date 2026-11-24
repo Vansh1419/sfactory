@@ -213,10 +213,10 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - Write the shared skills: plain-language-approval, escalation-rules, handoff-notes.
 - **Done when:** an agent can read a file inside its folder, is refused outside it, and a tagged write tool pauses for a decision.
 
-**1.11 Phase 1 gate test** (half a day)
-- Script the gate scenario so it can be re-run.
+**1.11 Phase 1 gate test** (half a day) — status: **done** (Nov 25, 2026)
+- Script the gate scenario so it can be re-run. **Done:** `scripts/gate1.js`, run with `npm run gate:1` and graded by the 3-case `phase1-gate` eval (32 checks: the founder approves, then rejects). Real app, database, bot, planner, card writer, policy, graph and audit log; fake Telegram servers, model and purchase tool. It found one real gap, fixed: after the founder's tap nobody was told how the run ended.
 
-**Gate 1:** a fake agent proposes a spend, a plain-language card reaches Telegram and the dashboard, one approval unblocks it, and `audit_log` records every step.
+**Gate 1 (passed Nov 25, 2026, with fakes for Telegram, the model and the purchase; not yet with a real phone and a real model):** a fake agent proposes a spend, a plain-language card reaches Telegram and the dashboard, one approval unblocks it, and `audit_log` records every step.
 
 ### Phase 2: Client-facing teams (days 8–14)
 

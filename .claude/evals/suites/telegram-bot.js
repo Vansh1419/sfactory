@@ -661,6 +661,35 @@ const cases = [
     },
   },
   {
+    id: 'a-run-that-finishes-after-the-founders-answer-is-reported-with-the-same-honest-summary',
+    async check() {
+      const h = harness({ orchestrator: controllableOrchestrator() });
+      const code = 'def add(a, b):\n    return a + b\n';
+      await h.bot.announceRun({ threadId: 't', status: 'done', results: [{ taskId: 't1', title: 'Buy it', outcome: 'ran' }, { taskId: 't2', title: 'Write', outcome: 'ran', output: code }], log: ['Buy it: done', 'Write: done'] });
+      const ok1 = h.sent.length === 1 && /^Finished\./.test(h.sent[0].text) && h.sent[0].text.includes('Buy it: done') && h.sent[0].text.includes(code);
+      await h.bot.announceRun({ threadId: 't2', status: 'done', results: [{ taskId: 't1', title: 'Buy it', outcome: 'failed' }], log: ['Buy it: failed'] });
+      const ok2 = /Finished, but 1 task did not go ahead/.test(h.sent[1].text);
+      await h.bot.announceRun({ threadId: 't3', status: 'failed', message: 'The run stopped part-way.', results: [], log: [] });
+      const ok3 = h.sent.length === 3 && /could not start|stopped/i.test(h.sent[2].text);
+      return verdict(ok1 && ok2 && ok3 && h.sent.every((m) => m.chatId === FOUNDER), json(h.sent.map((m) => m.text.slice(0, 80))));
+    },
+  },
+  {
+    id: 'announcing-a-run-never-throws-and-never-sends-anything-for-odd-input',
+    async check() {
+      const h = harness({ orchestrator: controllableOrchestrator() });
+      for (const odd of [undefined, null, 5, 'x', [], { status: 'waiting' }, { status: 'running' }, { status: 'unknown' }]) {
+        try {
+          await h.bot.announceRun(odd);
+        } catch (err) {
+          if (err.constructor.name === 'PendingError') throw err;
+          return verdict(false, `threw on ${json(odd)}: ${err.message}`);
+        }
+      }
+      return verdict(h.sent.length === 0, json(h.sent));
+    },
+  },
+  {
     id: 'a-run-that-could-not-start-shows-its-plain-message',
     async check() {
       const o = controllableOrchestrator();

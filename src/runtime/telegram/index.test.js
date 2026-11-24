@@ -186,3 +186,38 @@ test('stop unsubscribes from new decisions', () => {
   service.stop();
   assert.equal(listeners.has('decision.created'), false);
 });
+
+test('a run that finishes after an answer is reported to the founder, and stop stops listening', async () => {
+  let listener = null;
+  let removed = false;
+  const orchestrator = {
+    submitGoal: async () => ({ status: 'done', log: [] }),
+    onRunFinished: (fn) => {
+      listener = fn;
+      return () => {
+        removed = true;
+      };
+    },
+  };
+  const { service, requests } = setup({ orchestrator });
+  service.start();
+  assert.equal(typeof listener, 'function');
+  await listener({ threadId: 't', status: 'done', results: [{ taskId: 't1', title: 'Buy it', outcome: 'ran' }], log: ['Buy it: done'] });
+  const sent = requests.filter((r) => r.method === 'sendMessage');
+  assert.match(sent[sent.length - 1].body.text, /Finished\./);
+  service.stop();
+  assert.equal(removed, true);
+});
+
+test('a failure to report a finished run goes to onError and never throws', async () => {
+  let listener = null;
+  const orchestrator = { submitGoal: async () => ({}), onRunFinished: (fn) => { listener = fn; return () => {}; } };
+  const { service, errors } = setup({
+    orchestrator,
+    fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  });
+  service.start();
+  await listener({ threadId: 't', status: 'done', results: [], log: [] });
+  assert.ok(errors.length >= 1);
+  service.stop();
+});

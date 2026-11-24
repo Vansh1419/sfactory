@@ -384,7 +384,16 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, o
     }
   }
 
-  return { handleUpdate, pushCard, notifyReminder };
+  /**
+   * Tell the founder how a run ended after they answered a card (the /goal message only reports the first stage).
+   * It says the same honest thing as a run that finishes at once. A run that is still going says nothing here.
+   */
+  async function announceRun(result) {
+    if (!result || typeof result !== 'object' || !['done', 'failed'].includes(result.status)) return null;
+    return reply(describeRun(result));
+  }
+
+  return { handleUpdate, pushCard, notifyReminder, announceRun };
 }
 
 module.exports = { createBot };

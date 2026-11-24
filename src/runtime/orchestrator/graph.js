@@ -358,7 +358,8 @@ function createOrchestrator({ planner, writeCard, runTool, decisions, policy, ch
     if (!FINAL_ANSWERS.includes(row?.status)) return summary;
 
     await graph.invoke(new Command({ resume: row.status }), configFor(threadId));
-    return announceIfFailed(summarize(threadId, await snapshotOf(threadId), { settled: true }));
+    // `continued` says this call really moved the run on (a repeated answer finds it already done and says false).
+    return { ...announceIfFailed(summarize(threadId, await snapshotOf(threadId), { settled: true })), continued: true };
   }
 
   /** Continue a waiting run if its decision has been answered. Only `threadId` is read from the request. */

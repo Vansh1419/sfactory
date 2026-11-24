@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run check:db` — after applying the migrations to your Supabase project, check that all 14 core tables exist (read-only; uses `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`).
 - `npm test` — unit tests (`node --test` over `.claude/**/*.test.js`, `src/**/*.test.js` and `scripts/**/*.test.js`; the globs are explicit because Node's default discovery skips dot-directories). Single file: `node --test .claude/evals/lib.test.js`.
 - `npm run eval` — run all eval suites in `.claude/evals/suites/`. One suite: `node .claude/evals/run.js policy-check`. Add `--verbose` to list every case.
+- `npm run gate:1` — the Phase 1 gate scenario (`scripts/gate1.js`): a fake agent proposes a spend, the card reaches Telegram and the dashboard, one tap approves it, the purchase happens once, and `audit_log` has every step. Real app and database, fake Telegram, model and purchase tool; also graded by the `phase1-gate` eval.
 - `npm run eval:strict` — same, but suites whose code isn't written yet count as failures. Use this at phase gates.
 
 There is no linter configured yet. `out/` (build output) and `dist/` (reserved for packaging) are gitignored.

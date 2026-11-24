@@ -35,11 +35,11 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
-| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 70 | 100% | 1.8 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 72 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
-| `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 25 | 100% | 1.7d | pass |
+| `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 33 | 100% | 1.7d | pass |
 | `orchestrator-model` | `src/runtime/orchestrator/model.js` (the model-written planner and card writer), with a scripted router | 26 | 100% | 1.7e | pass |
 | `approval-queue` | `src/renderer/queue.mjs` (the logic behind the approval queue screen) | 28 | 100% | 1.9 | pass |
 | `tool-loader` | `src/runtime/tools/{index,builtin,files}.js` | 29 | 100% | 1.10 (loader) | pass |
@@ -51,6 +51,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `supabase-tool` | `src/runtime/tools/supabase.js` (read-only rows from a few tables) | 13 | 100% | 1.10 (Supabase) | pass |
 | `tool-gate` | the step 1.10 "done when", end to end with the real policy, loader, filesystem and GitHub tools and graph | 9 | 100% | 1.10 (gate) | pass |
 | `shared-skills` | `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` | 9 | 100% | 1.10 (skills) | pass |
+| `phase1-gate` | `scripts/gate1.js` (Gate 1, also run by hand with `npm run gate:1`) | 3 | 100% | 1.11 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -188,7 +189,7 @@ Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; 
 
 Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
 
-**Cases:** 70
+**Cases:** 72
 
 Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
 
@@ -378,6 +379,20 @@ Suite: `.claude/evals/suites/shared-skills.js`. Checks `.claude/skills/shared/{p
 
 Covers: name matches folder, a description, a link to the charter and a length limit; no key-like text; the approval skill lists the seven parts in order with the money, time, "Show details" and "Price not known yet" rules, its good example card PASSES the real card checker and its bad example FAILS it; the escalation skill names every tool the policy always asks about, the four kinds of decision, the preview-deploy rule and "the policy check decides, treat doubt as crucial"; the handoff skill has its five headings and forbids secrets. Checked by mutation: a missing tool name, a changed example and a renamed heading were each caught.
 
+### phase1-gate
+
+Suite: `.claude/evals/suites/phase1-gate.js`. The scenario is `scripts/gate1.js`, so it can be re-run by hand with `npm run gate:1` (prints every step, exit code 1 on any failure) and also runs with `npm run eval`.
+
+**Cases:** 3 (each wraps 16 checks)
+
+Gate 1 of the plan: "a fake agent proposes a spend, a plain-language card reaches Telegram and the dashboard, one approval unblocks it, and `audit_log` records every step." **Real:** the whole app (`createApp`), a real Postgres with the real migrations, the real Telegram bot and poller, the real planner and card writer (prompts built, answers parsed), the real policy check, decisions service, tool loader, orchestrator graph and audit log. **Fake:** Telegram's servers, the model (the "fake agent": a plan with a purchase and a card), and the purchase tool (it only records that it was called). Any other network request is refused and counted.
+
+The founder's path, run twice (the founder approves; the founder rejects): a `/goal` on Telegram is acknowledged; the plan's purchase becomes a decision in the spend category; the card passes the plain-language checker and shows ₹ and $; it reaches Telegram with Approve and Reject buttons; it is on the dashboard queue and the window is told; nothing is bought while it waits; one tap on the phone answers it and Telegram confirms; the run continues and buys exactly once, after its audit entry (or, on a rejection, buys nothing and still finishes); Telegram tells the founder how it ended; answering again from the dashboard changes nothing; `audit_log` has every step in order, no key or token anywhere, and says who answered and how; the window is told about every stage; the model ran once for the plan and once for the card with the right key and nothing else was reached. The third case runs the scenario again on a brand new database to prove it can be re-run.
+
+Checked by mutation on Nov 25, 2026: 7 deliberate breaks in the product code (cards never pushed to Telegram, the purchase made routine, the tool run not audited, a rejection still running the tool, the end of a resumed run not announced, a tap recorded as a dashboard answer, the card not announced to the window), all caught.
+
+**Found by the gate:** after the founder's tap, nobody told them how the run ended (`/goal` only reports the first stage), so a purchase could happen with no message afterwards. Fixed with `onRunFinished` in the orchestrator service (8 new `orchestrator-service` cases) and `announceRun` in the bot (2 new `telegram-bot` cases): the end of a resumed run is announced once, only when it ends done or failed (never for a run that pauses on another card), with the same honest summary and any text a task produced.
+
 ### goals-view
 
 Suite: `.claude/evals/suites/goals-view.js`. No dataset. Code under test: `src/renderer/goals.mjs`: plain functions with no React and no `window`. The Goals panel (`GoalsPanel.jsx`) only draws what they return.
@@ -422,7 +437,7 @@ Checked live on Nov 24, 2026 (local stand-in database, Claude Code provider, no 
 
 Suite: `.claude/evals/suites/orchestrator-service.js`. No dataset. Code under test: `src/runtime/orchestrator/service.js`. It runs against the REAL audit log and checkpoint store on a real Postgres with the real migrations (`scripts/fake-supabase.js`), one fresh database per case; the decisions service is a small fake and the policy is the real one.
 
-**Cases:** 25
+**Cases:** 33
 
 Contract: `createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError? })` returns `submitGoal`, `status`, `start()` and `stop()`. A run that files a card writes an `orchestrator.waiting` audit entry (target = the decision, detail = the run's thread id); that is how an answer finds its run again, with no new table.
 

@@ -20,6 +20,8 @@ const MAX_RECOVERY_ENTRIES = 100;
 const DEFAULT_GOALS = 20;
 const MAX_GOALS = 50;
 
+const MAX_ANNOUNCED_REMEMBERED = 500;
+
 function createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError = () => {} }) {
   const orchestrator = createOrchestrator({
     planner,
@@ -41,10 +43,35 @@ function createOrchestratorService({ store, rawAudit, decisions, policy, runtime
     return typeof entry?.detail?.threadId === 'string' ? entry.detail.threadId : null;
   }
 
+  // Who is told when a run that was resumed by an answer ends (the Telegram bot tells the founder how it ended).
+  // A run is announced once, and only when it ends done or failed: a run that pauses on another card is not "finished".
+  const finishedListeners = new Set();
+  const announced = new Set();
+
+  function onRunFinished(listener) {
+    if (typeof listener !== 'function') return () => {};
+    finishedListeners.add(listener);
+    return () => finishedListeners.delete(listener);
+  }
+
+  async function announce(result) {
+    if (!result || result.continued !== true || !['done', 'failed'].includes(result.status) || typeof result.threadId !== 'string') return;
+    if (announced.has(result.threadId)) return;
+    announced.add(result.threadId);
+    if (announced.size > MAX_ANNOUNCED_REMEMBERED) announced.delete(announced.values().next().value);
+    for (const listener of [...finishedListeners]) {
+      try {
+        await listener(result);
+      } catch {
+        // A broken listener must not harm the run, which has already finished, or the other listeners.
+      }
+    }
+  }
+
   async function onAnswered(event) {
     try {
       const threadId = await threadFor(event?.id);
-      if (threadId) await orchestrator.resume({ threadId });
+      if (threadId) await announce(await orchestrator.resume({ threadId }));
     } catch (err) {
       onError(err);
     }
@@ -59,7 +86,7 @@ function createOrchestratorService({ store, rawAudit, decisions, policy, runtime
         const threadId = entry?.detail?.threadId;
         if (typeof threadId !== 'string' || seen.has(threadId)) continue;
         seen.add(threadId);
-        await orchestrator.resume({ threadId });
+        await announce(await orchestrator.resume({ threadId }));
       }
     } catch (err) {
       onError(err);
@@ -105,6 +132,7 @@ function createOrchestratorService({ store, rawAudit, decisions, policy, runtime
     orchestrator,
     submitGoal,
     listGoals,
+    onRunFinished,
     status: orchestrator.status,
 
     /** Listen for answers, then recover. Calling it again does nothing. */

@@ -3,7 +3,9 @@
 // Grades the orchestrator service (PLAN.md step 1.7d):
 //   src/runtime/orchestrator/service.js
 //     createOrchestratorService({ store, rawAudit, decisions, policy, runtime, planner, writeCard, runTool, onError? })
-//       -> { submitGoal({ goal }), start(), stop() }
+//       -> { submitGoal({ goal }), onRunFinished(listener) -> unsubscribe, start(), stop() }
+//     onRunFinished(listener): called with a run's summary when a run that was resumed by an answer (or on start) ends
+//     done or failed; never for a run that pauses on another card; a listener that throws harms nothing
 //
 // It connects the orchestrator graph to the rest of the app:
 //   - the graph writes an `orchestrator.waiting` audit entry linking a decision to its run
@@ -198,6 +200,116 @@ const cases = [
   },
 
   // ---- Recovering after the app was closed ---------------------------------------------------------------
+  // ---- Telling the founder how a resumed run ended ----------------------------------------------------
+  {
+    id: 'a-run-that-finishes-after-an-answer-is-announced-once-with-its-summary',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      const r = heard[0];
+      return verdict(heard.length === 1 && r.status === 'done' && r.threadId === paused.threadId && r.results.map((x) => x.outcome).join() === 'ran,ran,ran' && Array.isArray(r.log), json({ heard: heard.length, r }));
+    }),
+  },
+  {
+    id: 'a-rejected-run-that-finishes-is-announced-too',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'rejected');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'rejected', via: 'dashboard' });
+      return verdict(heard.length === 1 && heard[0].status === 'done' && heard[0].results.map((x) => x.outcome).join() === 'ran,rejected,ran', json(heard));
+    }),
+  },
+  {
+    id: 'the-same-answer-delivered-twice-announces-the-end-once',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'dashboard' });
+      return verdict(heard.length === 1, json({ heard: heard.length }));
+    }),
+  },
+  {
+    id: 'a-run-that-pauses-on-another-card-is-not-announced-as-finished',
+    check: () => inWorld({ tasks: [spend('First purchase'), spend('Second purchase')] }, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      const goals = await svc.listGoals({});
+      return verdict(heard.length === 0 && goals[0].status === 'waiting', json({ heard: heard.length, status: goals[0] && goals[0].status }));
+    }),
+  },
+  {
+    id: 'an-answer-nobody-is-waiting-on-announces-nothing',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      await w.runtime.deliver('decision.resolved', { id: crypto.randomUUID(), status: 'approved', via: 'telegram' });
+      return verdict(heard.length === 0 && w.calls.errors.length === 0, json({ heard: heard.length }));
+    }),
+  },
+  {
+    id: 'a-listener-that-throws-does-not-stop-the-others-or-count-as-an-error-in-the-run',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      svc.onRunFinished(() => { throw new Error(`broken listener ${SECRET}`); });
+      svc.onRunFinished(async () => { throw new Error('broken async listener'); });
+      svc.onRunFinished((result) => heard.push(result));
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      return verdict(heard.length === 1 && w.calls.run.length === 3 && !json(w.calls.errors.map((e) => String(e && e.message))).includes(SECRET), json({ heard: heard.length, ran: w.calls.run, errors: w.calls.errors.length }));
+    }),
+  },
+  {
+    id: 'a-listener-that-was-removed-is-not-called-and-odd-listeners-are-ignored',
+    check: () => inWorld({}, async (w) => {
+      const svc = w.build();
+      const heard = [];
+      const off = svc.onRunFinished((result) => heard.push(result));
+      const none = [undefined, null, 5, 'x', {}].map((bad) => typeof svc.onRunFinished(bad));
+      off();
+      svc.start();
+      const paused = await svc.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      await w.runtime.deliver('decision.resolved', { id: paused.waitingFor, status: 'approved', via: 'telegram' });
+      return verdict(heard.length === 0 && none.every((t) => t === 'function') && w.calls.run.length === 3, json({ heard: heard.length, none }));
+    }),
+  },
+  {
+    id: 'a-run-resumed-on-start-after-the-app-was-closed-is-announced-when-it-finishes',
+    check: () => inWorld({}, async (w) => {
+      const before = w.build();
+      const paused = await before.submitGoal({ goal: GOAL });
+      w.decisions.answer(paused.waitingFor, 'approved');
+      const after = w.build();
+      const heard = [];
+      after.onRunFinished((result) => heard.push(result));
+      await after.start();
+      return verdict(heard.length === 1 && heard[0].status === 'done', json({ heard: heard.length }));
+    }),
+  },
   {
     id: 'a-card-answered-while-the-app-was-closed-resumes-its-run-on-start',
     check: () => inWorld({}, async (w) => {

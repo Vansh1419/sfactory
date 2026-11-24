@@ -33,7 +33,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, additionalTools = [] }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -97,7 +97,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir }) {
     ],
     config: loadToolConfig({ dir: toolConfigDir }),
   });
-  const toolLoader = createToolLoader({ tools: toolSelection.tools, hasRule });
+  // `additionalTools` are tools added in code (the Phase 1 gate test uses a pretend purchase tool). They skip the
+  // configuration allow-list but NOT the policy: the loader still refuses one with no policy rule.
+  const toolLoader = createToolLoader({ tools: [...toolSelection.tools, ...(Array.isArray(additionalTools) ? additionalTools : [])], hasRule });
   const orchestrator = createOrchestratorService({
     store,
     rawAudit: audit,

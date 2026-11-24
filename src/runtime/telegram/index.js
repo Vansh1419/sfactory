@@ -54,6 +54,7 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
 
   const delivered = new Set(); // ids of cards sent to the phone during this run
   let unsubscribe = null;
+  let unsubscribeRuns = null;
   let reminders = null;
   let stopped = true;
 
@@ -97,6 +98,8 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
     start() {
       stopped = false;
       unsubscribe = runtime.on('decision.created', ({ id }) => deliver(id));
+      // A run that ends after the founder's answer (a tap on the phone or a click on the dashboard) is reported here.
+      unsubscribeRuns = orchestrator?.onRunFinished?.((result) => bot.announceRun(result).catch(onError)) ?? null;
       reminders = startReminderJob({ service: decisions, notify: notifyReminder, onError });
       poller.start().catch(onError); // runs until stop()
       if (store) pushWaitingCards();
@@ -105,9 +108,11 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
     stop() {
       stopped = true;
       unsubscribe?.();
+      unsubscribeRuns?.();
       reminders?.stop();
       poller.stop();
       unsubscribe = null;
+      unsubscribeRuns = null;
       reminders = null;
     },
   };
