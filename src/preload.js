@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('api', {
   brief: {
     get: () => invoke('brief.get'),
   },
+  files: {
+    pods: () => invoke('files.pods'),
+    tree: (args) => invoke('files.tree', args),
+    read: (args) => invoke('files.read', args),
+    history: (args) => invoke('files.history', args),
+    beginEdit: (args) => invoke('files.beginEdit', args),
+    endEdit: (args) => invoke('files.endEdit', args),
+    save: (args) => invoke('files.save', args),
+    upload: (args) => invoke('files.upload', args),
+  },
   agents: {
     pause: (args) => invoke('agents.pause', args),
   },

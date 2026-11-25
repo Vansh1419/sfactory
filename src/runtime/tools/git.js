@@ -219,4 +219,4 @@ function createGitTools({ podFolder, podRepo, githubToken, remoteUrl = (repo) =>
   ];
 }
 
-module.exports = { createGitTools };
+module.exports = { createGitTools, runGit };

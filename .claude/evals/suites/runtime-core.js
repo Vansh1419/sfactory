@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'files.beginEdit', 'files.endEdit', 'files.history', 'files.pods', 'files.read', 'files.save', 'files.tree', 'files.upload', 'goals.list', 'runtime.status', 'teams.list', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
     },
   },
   {

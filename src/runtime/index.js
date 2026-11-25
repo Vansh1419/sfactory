@@ -48,6 +48,7 @@ const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
+const { createPodFiles } = require('./pods/files');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,7 +71,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -135,6 +136,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // Pods (step 3.1): a project's own space. The founder approves a card, then the folder, git history, memory note and agents are made.
   // PODS_ROOT (an absolute path) wins over the folder main.js passes; with neither, a pod can be asked for but not opened.
   const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, allowedRepos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), isBlocked, onError: () => runtime.emit('pods.error', {}) });
+  // The project view's files panel (step 3.6): the founder reads, edits and adds files in a pod's folder; an edit is committed and locks the file for agents.
+  const podFiles = createPodFiles({ store, audit, podFolder: (podId) => pods.folderFor(podId), isBlocked, emit });
   // The Filesystem tools read inside ONE folder: FILESYSTEM_ROOT, or the app's own folder when main.js passes it.
   // With neither there are no filesystem tools (never a default of "the whole disk").
   const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot, podFolder: (podId) => pods.folderFor(podId), podsRoot: env.PODS_ROOT || podsRoot });
@@ -154,7 +157,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     ...createPodTools({ store }),
     // The Engineering team's own tools (step 3.3): writing a file in the pod's folder, library documentation (CONTEXT7_API_KEY is optional), and a
     // browser check of a public page (only when Playwright is installed: `npm i playwright && npx playwright install chromium`).
-    ...createPodFileTools({ podFolder: (podId) => pods.folderFor(podId) }),
+    // A file the founder has open in the project view is refused to agents until it is saved (step 3.6).
+    ...createPodFileTools({ podFolder: (podId) => pods.folderFor(podId), isLocked: (q) => podFiles.isLocked(q) }),
     ...createContext7Tools({ apiKey: env.CONTEXT7_API_KEY, fetchImpl }),
     ...createBrowserTools({ driver: loadPlaywrightDriver() }),
     ...createOutboundTools({ outbound }),
@@ -208,7 +212,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
   const jobs = createTeamJobs({ sales, support, emit, onError: () => runtime.emit('teams.error', {}) });
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -249,6 +253,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     finance,
     specialists,
     pods,
+    podFiles,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import ApprovalQueue from './ApprovalQueue.jsx';
 import BriefPanel from './BriefPanel.jsx';
+import FilesPanel from './FilesPanel.jsx';
 import GoalsPanel from './GoalsPanel.jsx';
 import TeamsPanel from './TeamsPanel.jsx';
 
@@ -61,6 +62,7 @@ export default function App() {
       <GoalsPanel ready={Boolean(ready)} />
       <ApprovalQueue ready={Boolean(ready)} />
       <TeamsPanel ready={Boolean(ready)} />
+      <FilesPanel ready={Boolean(ready)} />
     </main>
   );
 }

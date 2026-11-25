@@ -7,6 +7,7 @@
 
 const { CommandError } = require('./runtime');
 const { DecisionError } = require('./decisions');
+const { PodFilesError } = require('./pods/files');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 'cancelled'];
@@ -33,7 +34,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -167,6 +168,44 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
       return brief.get();
     },
   });
+
+  // The project view's files panel (step 3.6). The founder lists the open projects, then reads a project's files and history, opens a file for editing
+  // (which locks it for agents), saves it (a commit by the founder) or adds a new file. The service checks the project and the path again; the file's
+  // words never reach the audit log (only the path and the size). Its errors are written for the founder; anything else stays generic.
+  const podArg = (args) => (typeof args.podId === 'string' && UUID.test(args.podId) ? null : 'podId must be a project id');
+  const pathArg = (args) => (typeof args.path === 'string' && args.path.length >= 1 && args.path.length <= 300 ? null : 'path must be text of 1 to 300 characters');
+  const textArg = (args) => (typeof args.content === 'string' && args.content.length <= 100_000 ? null : 'content must be text of at most 100,000 characters');
+  const files = (name, keys, check, run, auditArgs) => runtime.register(name, {
+    ...(auditArgs ? { auditArgs } : {}),
+    validate: (args) => unknownKey(args, keys) ?? check(args),
+    handler: async (args) => {
+      if (!podFiles) throw new CommandError('not_available', 'Project files are not available right now.');
+      try {
+        return await run(args);
+      } catch (err) {
+        if (err instanceof PodFilesError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
+    },
+  });
+  runtime.register('files.pods', {
+    validate: (args) => unknownKey(args, []),
+    handler: async () => {
+      if (!pods) throw new CommandError('not_available', 'Projects are not available right now.');
+      return { pods: (await pods.list()).filter((p) => p.status === 'open').map((p) => ({ id: p.id, name: p.name, priority: p.priority })) };
+    },
+  });
+  files('files.tree', ['podId'], podArg, (a) => podFiles.tree({ podId: a.podId }));
+  files('files.read', ['podId', 'path'], (a) => podArg(a) ?? pathArg(a), (a) => podFiles.read({ podId: a.podId, path: a.path }));
+  files('files.history', ['podId', 'path', 'limit'], (a) => podArg(a) ?? (a.path === undefined ? null : pathArg(a)) ?? (a.limit === undefined || (Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 100) ? null : 'limit must be a whole number from 1 to 100'),
+    (a) => podFiles.history({ podId: a.podId, ...(a.path === undefined ? {} : { path: a.path }), ...(a.limit === undefined ? {} : { limit: a.limit }) }));
+  files('files.beginEdit', ['podId', 'path'], (a) => podArg(a) ?? pathArg(a), (a) => podFiles.beginEdit({ podId: a.podId, path: a.path }));
+  files('files.endEdit', ['podId', 'path'], (a) => podArg(a) ?? pathArg(a), (a) => podFiles.endEdit({ podId: a.podId, path: a.path }));
+  const note = (a) => (a.message === undefined || (typeof a.message === 'string' && a.message.length <= 200) ? null : 'message must be text of at most 200 characters');
+  const sizeOnly = (a) => ({ podId: a.podId, path: a.path, bytes: typeof a.content === 'string' ? Buffer.byteLength(a.content) : 0 });
+  files('files.save', ['podId', 'path', 'content', 'message'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a) ?? note(a),
+    (a) => podFiles.save({ podId: a.podId, path: a.path, content: a.content, ...(a.message === undefined ? {} : { message: a.message }) }), sizeOnly);
+  files('files.upload', ['podId', 'path', 'content'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a), (a) => podFiles.upload({ podId: a.podId, path: a.path, content: a.content }), sizeOnly);
 
   runtime.register('agents.pause', {
     validate(args) {

@@ -7,6 +7,7 @@
 //
 //   - the path is checked as written (no "..", no absolute path, no "~"), and again after the system has followed every link: the folder the file would
 //     land in must really be inside the pod folder, and an existing link is never written through
+//   - a file the founder has open in the project view (step 3.6, `isLocked`) is refused with a plain "Not done" result until it is saved or closed
 //   - folders that do not exist yet are made inside the pod folder; the text is plain (no NUL bytes) and up to 100,000 characters
 //   - an error is one plain sentence, never a real path or the system's own error text
 
@@ -17,6 +18,7 @@ const { isDeniedName } = require('./filesystem');
 const MAX_PATH_CHARS = 300;
 const MAX_CONTENT_CHARS = 100_000;
 const CANNOT_WRITE = 'That file cannot be written.';
+const LOCKED = 'Not done: the founder is editing that file right now. Leave it alone, or do your work in another file; it can be changed again once the founder has saved it.';
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const inside = (root, target) => {
@@ -38,7 +40,32 @@ async function deepestExisting(target) {
   }
 }
 
-function createPodFileTools({ podFolder } = {}) {
+/**
+ * Where `wanted` (a path written relative to the project folder) lands, or an error. `root` must already be a real path. The path is checked as written and
+ * again after every link on the way has been followed. `existing` is what is there now (null when nothing is). Nothing is made or changed.
+ */
+async function checkTarget(root, wanted) {
+  const written = String(wanted).replace(/\\/g, '/');
+  if (written === '' || path.isAbsolute(written) || written.startsWith('~') || written.endsWith('/')) throw new Error(CANNOT_WRITE);
+  const target = path.resolve(root, written);
+  if (!inside(root, target)) throw new Error(CANNOT_WRITE);
+  const rel = path.relative(root, target).split(path.sep);
+  if (rel.some((part) => part === '' || isDeniedName(part))) throw new Error(CANNOT_WRITE);
+  const nearest = await deepestExisting(target);
+  if (nearest !== root && !inside(root, nearest)) throw new Error(CANNOT_WRITE);
+  const existing = await fs.lstat(target).catch(() => null);
+  if (existing && !existing.isFile()) throw new Error(CANNOT_WRITE); // a link, a folder or anything else is never written through
+  return { target, rel: rel.join('/'), existing };
+}
+
+/** Make the folders a file needs, and check that the folder it lands in is really inside the project. */
+async function prepareFolder(root, target) {
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const landed = await fs.realpath(path.dirname(target));
+  if (landed !== root && !inside(root, landed)) throw new Error(CANNOT_WRITE);
+}
+
+function createPodFileTools({ podFolder, isLocked = () => false } = {}) {
   if (typeof podFolder !== 'function') return [];
 
   return [
@@ -63,23 +90,13 @@ function createPodFileTools({ podFolder } = {}) {
           if (typeof given !== 'string' || !path.isAbsolute(given)) throw new Error(CANNOT_WRITE);
           const root = await fs.realpath(given);
 
-          const wanted = args.path.replace(/\\/g, '/');
-          if (path.isAbsolute(wanted) || wanted.startsWith('~') || wanted.endsWith('/')) throw new Error(CANNOT_WRITE);
-          const target = path.resolve(root, wanted);
-          if (!inside(root, target)) throw new Error(CANNOT_WRITE);
-          if (path.relative(root, target).split(path.sep).some((part) => part === '' || isDeniedName(part))) throw new Error(CANNOT_WRITE);
-
-          // Every link on the way is followed: the folder it would land in must really be inside the project.
-          const nearest = await deepestExisting(target);
-          if (nearest !== root && !inside(root, nearest)) throw new Error(CANNOT_WRITE);
-          const existing = await fs.lstat(target).catch(() => null);
-          if (existing && !existing.isFile()) throw new Error(CANNOT_WRITE); // a link, a folder or anything else is never written through
-          await fs.mkdir(path.dirname(target), { recursive: true });
-          const landed = await fs.realpath(path.dirname(target));
-          if (landed !== root && !inside(root, landed)) throw new Error(CANNOT_WRITE);
+          const { target, rel } = await checkTarget(root, args.path);
+          // A file the founder has open is the founder's until it is saved or closed: it comes back as a result the agent can act on.
+          if (isLocked({ podId: context.podId, path: rel })) return { text: LOCKED };
+          await prepareFolder(root, target);
 
           await fs.writeFile(target, args.content, { encoding: 'utf8', mode: 0o644 });
-          return { text: `Saved ${path.relative(root, target).split(path.sep).join('/')} (${Buffer.byteLength(args.content)} bytes).` };
+          return { text: `Saved ${rel} (${Buffer.byteLength(args.content)} bytes).` };
         } catch {
           throw new Error(CANNOT_WRITE);
         }
@@ -88,4 +105,4 @@ function createPodFileTools({ podFolder } = {}) {
   ];
 }
 
-module.exports = { createPodFileTools };
+module.exports = { createPodFileTools, checkTarget, prepareFolder, deepestExisting, inside, CANNOT_WRITE };
