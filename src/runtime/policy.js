@@ -79,6 +79,18 @@ const RULES = new Map([
   ['memory.recall', { access: 'read' }],
   ['memory.remember', { access: 'write' }],
   ['pod.get_client', { access: 'read' }],
+  ['pod.info', { access: 'read' }],
+  // Step 3.3: the work a pull request is made from. Writing a file in the pod's own folder, starting a branch, saving a version on it and sending that
+  // branch to the pod's own GitHub repository are all routine: none of it reaches the live version (only a merge or a production deploy does, and
+  // those always ask). The tools themselves refuse the main line.
+  ['pod.write_file', { access: 'write' }],
+  ['git.create_branch', { access: 'write' }],
+  ['git.commit', { access: 'write' }],
+  ['git.push_branch', { access: 'write' }],
+  // Looking things up while working (step 3.3): library documentation and a page's behaviour in a browser. Read only; they change nothing of ours.
+  ['context7.search_library', { access: 'read' }],
+  ['context7.get_docs', { access: 'read' }],
+  ['browser.check_page', { access: 'read' }],
   ['github.read_file', { access: 'read' }],
   ['github.list_pull_requests', { access: 'read' }],
   ['github.create_pull_request', { access: 'write' }],

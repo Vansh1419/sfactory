@@ -1,0 +1,30 @@
+# The Engineering team's own tools, on top of shared.yaml (PLAN.md step 3.3). Read by src/runtime/tools/config.js and graded by the
+# `engineering-team` and `engineering-tools` evals. Same format as shared.yaml: tool name: read | write, and the tag must match the tag the tool
+# declares itself. Listing a tool does NOT make it allowed: the policy check still decides.
+#
+# The Engineering team works inside ONE pod at a time. Inside a pod only tools that declare how they stay inside it are available (see `podAccess`
+# in src/runtime/tools/index.js), so of the shared tools only the project-folder, database, GitHub, open-web and draft tools can be used there,
+# and the GitHub tools work on the pod's own repository only.
+#
+# There is no tool that merges a pull request or deploys: reaching for `github.merge_pull_request` or `vercel.deploy` (production) stops the agent
+# and files a card for the founder (the ask-rules in src/runtime/policy.js).
+tools:
+  # Knowing the project, and the work a pull request is made from.
+  pod.info: read
+  pod.get_client: read
+  pod.write_file: write
+  git.status: read
+  git.log: read
+  git.diff: read
+  git.create_branch: write
+  git.commit: write
+  git.push_branch: write
+
+  # The project's own notes.
+  memory.recall: read
+  memory.remember: write
+
+  # Looking things up while working.
+  context7.search_library: read
+  context7.get_docs: read
+  browser.check_page: read

@@ -10,6 +10,7 @@ const { redactDetail } = require('../audit');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FAILED = 'The client details cannot be read.';
+const INFO_FAILED = 'The project details cannot be read.';
 const MAX_NOTES_CHARS = 2000;
 
 function createPodTools({ store } = {}) {
@@ -43,6 +44,34 @@ function createPodTools({ store } = {}) {
           return { text: redactDetail(lines.join('\n')) };
         } catch {
           throw new Error(FAILED);
+        }
+      },
+    }),
+    Object.freeze({
+      name: 'pod.info',
+      access: 'read',
+      podAccess: 'scoped',
+      summary: 'Gives the name, kind, priority, deadline and GitHub repository of the project you are working in. It takes no arguments.',
+      args: '{}',
+      checkArgs: (args) => (args !== null && typeof args === 'object' && !Array.isArray(args) ? (Object.keys(args)[0] ? `unknown argument: ${Object.keys(args)[0]}` : null) : 'the arguments must be an object'),
+      async run({ context }) {
+        const podId = context?.podId;
+        if (typeof podId !== 'string' || !UUID.test(podId)) throw new Error(INFO_FAILED);
+        try {
+          const [pod] = await store.select('pods', { where: { id: podId.toLowerCase() }, limit: 1 });
+          if (!pod) throw new Error(INFO_FAILED);
+          const [project] = await store.select('projects', { where: { id: pod.project_id }, limit: 1 });
+          if (!project) throw new Error(INFO_FAILED);
+          const lines = [
+            `Project: ${project.name}`,
+            `Kind: ${project.kind === 'agency_client' ? 'a project for a client' : 'a product of our own'}`,
+            `Priority: ${project.priority}`,
+            `Deadline: ${project.deadline ? String(project.deadline).slice(0, 10) : 'not set'}`,
+            `GitHub repository: ${project.github_repo ?? 'none (changes stay in the project folder)'}`,
+          ];
+          return { text: redactDetail(lines.join('\n')) };
+        } catch {
+          throw new Error(INFO_FAILED);
         }
       },
     }),

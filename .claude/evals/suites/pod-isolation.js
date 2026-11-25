@@ -162,7 +162,7 @@ const cases = [
         for (const p of ['.', '..', 'link-to-b', `../${B}`, '../..']) lists.push([p, await w.use(w.A.podId, 'filesystem.list_directory', 'read', { path: p })]);
         const here = lists[0][1].text;
         const unknown = [];
-        for (const id of [RANDOM_ID, 'not-a-uuid', 'x', '', null, 5, w.B.podId.replace(/.$/, '0')]) unknown.push([id, await w.use(id, 'filesystem.read_file', 'read', { path: 'README.md' })]);
+        for (const id of [RANDOM_ID, 'not-a-uuid', 'x', '', null, 5, w.B.podId.replace(/.$/, (c) => (c === '0' ? '1' : '0'))]) unknown.push([id, await w.use(id, 'filesystem.read_file', 'read', { path: 'README.md' })]);
         const all = [...got.map(([, r]) => r.text ?? ''), ...lists.map(([, r]) => r.text ?? ''), ...unknown.map(([, r]) => r.text ?? '')];
         const ok = own.ok && own.text.includes('ALPHA-FILE-SECRET') && readme.ok && readme.text.includes('Alpha Bakery Site')
           && got.every(([, r]) => !r.ok) && lists.slice(1).every(([, r]) => !r.ok) && !all.some((t) => /BETA|COMPANY-FILE|PARENT-REPO/.test(t))
@@ -348,7 +348,11 @@ const cases = [
       const { createOutboundTools } = loadSubject('src/runtime/outbound/tools.js');
       const { createFetchTools } = loadSubject('src/runtime/tools/fetch.js');
       const { BUILTIN_TOOLS } = loadSubject('src/runtime/tools/builtin.js');
+      const { createPodFileTools } = loadSubject('src/runtime/tools/pod-files.js');
+      const { createContext7Tools } = loadSubject('src/runtime/tools/context7.js');
+      const { createBrowserTools } = loadSubject('src/runtime/tools/browser.js');
       const everything = [
+        ...createPodFileTools({ podFolder: async () => null }), ...createContext7Tools({ fetchImpl }), ...createBrowserTools({ driver: { visit: async () => ({}) } }),
         ...w.tools, ...BUILTIN_TOOLS, ...createFetchTools(),
         ...createGitHubTools({ token: 't', repos: ['acme/site'], fetchImpl }), ...createSearchTools({ apiKey: 'k', fetchImpl }), ...createCrmTools({ store: w.store }),
         ...createGoogleTools({ clientId: 'c', clientSecret: 's', refreshToken: 'r', fetchImpl }),
@@ -356,8 +360,12 @@ const cases = [
       ];
       const open = everything.filter((t) => ['scoped', 'neutral'].includes(t.podAccess)).map((t) => t.name).sort();
       const closed = everything.filter((t) => !['scoped', 'neutral'].includes(t.podAccess)).map((t) => t.name).sort();
-      const expectedOpen = ['docs.create_draft', 'fetch.get', 'filesystem.list_directory', 'filesystem.read_file', 'git.diff', 'git.log', 'git.status', 'memory.recall', 'memory.remember', 'pod.get_client', 'search.web', 'supabase.select'];
-      const mustBeClosed = ['github.read_file', 'github.create_pull_request', 'crm.find_lead', 'crm.save_lead', 'gmail.search', 'drive.list_files', 'tickets.get', 'email.submit', 'email.send'];
+      const expectedOpen = [
+        'browser.check_page', 'context7.get_docs', 'context7.search_library', 'docs.create_draft', 'fetch.get', 'filesystem.list_directory', 'filesystem.read_file',
+        'git.commit', 'git.create_branch', 'git.diff', 'git.log', 'git.push_branch', 'git.status', 'github.create_pull_request', 'github.list_pull_requests', 'github.read_file',
+        'memory.recall', 'memory.remember', 'pod.get_client', 'pod.info', 'pod.write_file', 'search.web', 'supabase.select',
+      ];
+      const mustBeClosed = ['github.merge_pull_request', 'crm.find_lead', 'crm.save_lead', 'gmail.search', 'drive.list_files', 'tickets.get', 'email.submit', 'email.send'];
       const ok = json(open) === json(expectedOpen) && mustBeClosed.every((t) => closed.includes(t));
       return verdict(ok, json({ open, closed }));
     },

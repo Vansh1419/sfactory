@@ -91,6 +91,7 @@ async function build(over = {}) {
     runtime,
     templatesDir: over.templatesDir ?? TEMPLATES(),
     root,
+    allowedRepos: over.allowedRepos ?? ['acme/site-a', 'acme/site-b'],
     isBlocked: over.isBlocked,
     onError: (err) => errors.push(err),
   });
@@ -261,6 +262,42 @@ const cases = [
       const ok = x.podId === y.podId && x.podId === again.podId && again.resumed === true && pods.length === 1 && projects.length === 1 && memory.length === 1 && count === '1'
         && finished.folder === folder && fs.readFileSync(path.join(folder, 'README.md'), 'utf8') === 'EDITED BY THE FOUNDER\n' && fs.existsSync(path.join(folder, 'BRIEF.md')) && git(folder, 'rev-list', '--count', 'HEAD') === '1';
       return verdict(ok, json({ x: x.podId, y: y.podId, again: again.podId, pods: pods.length, projects: projects.length, memory: memory.length, count }));
+    },
+  },
+  {
+    // Step 3.3 (Nov 26, 2026): a pod can be tied to one GitHub repository from the founder's own list (GITHUB_REPOS), on the card the founder approves.
+    id: 'a-pod-can-be-tied-to-one-repository-from-the-founders-list-and-nothing-else',
+    async check() {
+      const h = await build();
+      const { checkCard } = require(path.join(ROOT, 'src/runtime/cards'));
+      const name = unique('Tied Project');
+      const tied = await h.pods.propose({ name, template: 'saas_product', githubRepo: 'ACME/Site-A' });
+      const [card] = await rows(h, 'decisions', { id: tied.decisionId });
+      const untied = await h.pods.propose({ name: unique('Untied Project'), template: 'saas_product' });
+      const [untiedCard] = await rows(h, 'decisions', { id: untied.decisionId });
+      const refused = [];
+      for (const githubRepo of ['acme/not-listed', '../x', 'acme/..', 5, '', null, 'acme/site-a/extra', 'acme/site-a ', { repo: 'acme/site-a' }]) refused.push(await h.pods.propose({ name, template: 'saas_product', githubRepo }).then(() => 'accepted', (e) => e.code));
+      const noList = await build({ allowedRepos: [] });
+      const refusedWithNoList = await noList.pods.propose({ name, template: 'saas_product', githubRepo: 'acme/site-a' }).then(() => 'accepted', (e) => e.code);
+
+      await answer(h, tied.decisionId);
+      await answer(h, untied.decisionId);
+      const a = await h.pods.open(tied.decisionId);
+      const b = await h.pods.open(untied.decisionId);
+      const [projectA] = await rows(h, 'projects', { id: tied.projectId });
+      const [projectB] = await rows(h, 'projects', { id: untied.projectId });
+      const odd = [await h.pods.repoFor('x'), await h.pods.repoFor(undefined), await h.pods.repoFor('3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d')];
+
+      // The list shrank between the answer and the opening: the pod is not opened, and nothing is made.
+      const later = await h.pods.propose({ name: unique('List Shrank'), template: 'saas_product', githubRepo: 'acme/site-b' });
+      await answer(h, later.decisionId);
+      const stricter = await build({ allowedRepos: ['acme/site-a'], root: h.root });
+      const notOpened = await stricter.pods.open(later.decisionId).then(() => 'opened', (e) => e.code);
+      const ok = card.action.args.githubRepo === 'acme/site-a' && String(card.card.details).includes('GitHub repository: acme/site-a') && /GitHub page/.test(card.card.if_yes) && checkCard(card.card).ok !== false
+        && String(untiedCard.card.details).includes('GitHub repository: none') && !/GitHub/.test(untiedCard.card.if_yes) && refused.every((r) => r === 'invalid') && refusedWithNoList === 'invalid'
+        && projectA.github_repo === 'acme/site-a' && projectB.github_repo === null && (await h.pods.repoFor(a.podId)) === 'acme/site-a' && (await h.pods.repoFor(b.podId)) === null && odd.every((r) => r === null)
+        && notOpened === 'invalid' && !(await podFor(h, later.decisionId)) && (await rows(h, 'projects', { id: later.projectId })).length === 0;
+      return verdict(ok, json({ refused, refusedWithNoList, projectA: projectA.github_repo, notOpened }));
     },
   },
   {

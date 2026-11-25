@@ -33,6 +33,7 @@ const MAX_NAME = 80;
 const MAX_NOTE = 1500;
 const MAX_RECOVERED = 50;
 const GIT_TIMEOUT_MS = 30_000;
+const REPO_SHAPE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
 class PodError extends Error {
   constructor(code, message, problems) {
@@ -64,12 +65,14 @@ function runGit(args, cwd) {
   });
 }
 
-function createPods({ store, audit, decisions, runtime, templatesDir, root, isBlocked = () => null, newId = () => crypto.randomUUID(), now = () => new Date(), git = runGit, emit, onError = () => {} } = {}) {
+function createPods({ store, audit, decisions, runtime, templatesDir, root, allowedRepos = [], isBlocked = () => null, newId = () => crypto.randomUUID(), now = () => new Date(), git = runGit, emit, onError = () => {} } = {}) {
   const loaded = loadPodTemplates({ dir: templatesDir });
   const templates = loaded.templates;
   const rootDir = typeof root === 'string' && path.isAbsolute(root) ? path.resolve(root) : null;
   let unsubscribe = null;
   const opening = new Map(); // decision id -> the run in progress, so two answers at once open one pod
+  // The repositories the founder named (GITHUB_REPOS). A pod can be tied to one of these and to nothing else; the spelling of the list is kept.
+  const repos = new Map((Array.isArray(allowedRepos) ? allowedRepos : []).filter((r) => typeof r === 'string' && REPO_SHAPE.test(r)).map((r) => [r.toLowerCase(), r]));
 
   const announce = (type, data) => {
     try {
@@ -100,7 +103,7 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, isBl
 
   function readProposal(input) {
     if (!isObject(input)) throw fail('invalid', 'A project needs a name and a kind.');
-    const extra = Object.keys(input).find((k) => !['name', 'template', 'clientId', 'service', 'priority', 'deadline', 'note'].includes(k));
+    const extra = Object.keys(input).find((k) => !['name', 'template', 'clientId', 'service', 'priority', 'deadline', 'note', 'githubRepo'].includes(k));
     if (extra) throw fail('invalid', `Unknown field: ${extra}.`);
     const name = plain(input.name, MAX_NAME + 1);
     if (name === '' || name.length > MAX_NAME) throw fail('invalid', `The project needs a name of 1 to ${MAX_NAME} characters.`);
@@ -127,6 +130,11 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, isBl
       if (typeof input.note !== 'string') throw fail('invalid', 'note must be text.');
       out.note = plain(input.note, MAX_NOTE);
     }
+    if (input.githubRepo !== undefined) {
+      const named = typeof input.githubRepo === 'string' ? repos.get(input.githubRepo.toLowerCase()) : undefined;
+      if (!named) throw fail('invalid', 'That GitHub repository is not on your list (GITHUB_REPOS), so a project cannot use it.');
+      out.githubRepo = named;
+    }
     return out;
   }
 
@@ -139,12 +147,13 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, isBl
       `Priority: ${p.priority}`,
       `Deadline: ${p.deadline ? p.deadline.slice(0, 10) : 'not set'}`,
       `Teams that join it: ${templates[p.template].teams.map((t) => t.replace(/_/g, ' ')).join(', ')}`,
+      `GitHub repository: ${p.githubRepo ?? 'none'}`,
       `What it is for: ${p.note || 'not set'}`,
     ];
     return {
       decide: `Open a new project space for "${p.name}"?`,
       why_now: isClient ? 'A new client project needs its own space before anyone can start work on it.' : 'A new product needs its own space before anyone can start work on it.',
-      if_yes: 'A private space is made for this project, with its own files, its own history of changes and its own notes. The right teams are added to it. Nothing is sent to anyone.',
+      if_yes: `A private space is made for this project, with its own files, its own history of changes and its own notes. The right teams are added to it.${p.githubRepo ? ' The team can suggest changes on its GitHub page, but nothing goes live without your approval.' : ''} Nothing is sent to anyone.`,
       if_no: 'No space is made and nothing changes. You can ask again later.',
       cost: '₹0 ($0)',
       risk: { level: 'Low', reason: 'It only makes a folder on this computer, and it can be closed later.' },
@@ -215,7 +224,9 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, isBl
   async function ensureProject(args, decisionId, folder) {
     const [existing] = await store.select('projects', { where: { id: args.projectId }, limit: 1 });
     if (existing) return existing;
+    if (args.githubRepo !== undefined && !repos.has(String(args.githubRepo).toLowerCase())) throw fail('invalid', 'The repository on this card is no longer on your list (GITHUB_REPOS), so the project was not opened.');
     const row = { id: args.projectId, name: args.name, kind: args.template, priority: args.priority, status: 'active', repo_path: folder };
+    if (args.githubRepo) row.github_repo = repos.get(String(args.githubRepo).toLowerCase());
     if (args.clientId) row.client_id = args.clientId;
     if (args.service) row.service = args.service;
     if (args.deadline) row.deadline = args.deadline;
@@ -354,7 +365,16 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, isBl
     return project?.repo_path ? folderPath(project.repo_path) : null;
   }
 
-  return { propose, open, start, stop, list, folderFor, templates: describeTemplates, problems: loaded.problems, PodError };
+  /** The GitHub repository a pod's project is tied to, or null. The pull-request tools take the repository from here and never from a model. */
+  async function repoFor(podId) {
+    if (typeof podId !== 'string' || !UUID.test(podId)) return null;
+    const [pod] = await store.select('pods', { where: { id: podId.toLowerCase() }, limit: 1 });
+    if (!pod) return null;
+    const [project] = await store.select('projects', { where: { id: pod.project_id }, limit: 1 });
+    return typeof project?.github_repo === 'string' ? project.github_repo : null;
+  }
+
+  return { propose, open, start, stop, list, folderFor, repoFor, templates: describeTemplates, problems: loaded.problems, PodError };
 }
 
 module.exports = { createPods, PodError, slugOf, runGit };

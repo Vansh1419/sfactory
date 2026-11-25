@@ -664,6 +664,37 @@ const cases = [
     },
   },
   {
+    // Step 3.3 (Nov 26, 2026): a project is tied to one GitHub repository, and the Engineering team's pull-request tools take it from here.
+    id: 'a-projects-github-repository-must-look-like-owner-name-and-never-contain-a-folder-like-part',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const make = (repo) => attempt(tx, "insert into projects (name, kind, github_repo) values ('R', 'saas_product', $1) returning id", [repo]);
+        for (const good of ['acme/site', 'Acme-Co/site.v2', 'a_b/c-d.e', null]) if (!(await make(good)).ok) problems.push(`refused a good repository: ${good}`);
+        for (const bad of ['', 'noslash', '/x', 'x/', 'a/b/c', 'a b/c', '../x', 'a/..', './x', 'a/.', '..', 'a/b;c', 'a/b\n', 'x'.repeat(101) + '/y']) {
+          if ((await make(bad)).ok) problems.push(`accepted a bad repository: ${JSON.stringify(bad)}`);
+        }
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-projects-repository-can-be-set-once-from-empty-and-never-changed-or-removed',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const id = idOf(await tx.query("insert into projects (name, kind) values ('Later', 'saas_product') returning id"));
+        const set = (value) => attempt(tx, 'update projects set github_repo = $2 where id = $1', [id, value]);
+        if (!(await set('acme/first')).ok) problems.push('could not set the repository from empty');
+        if (!(await set('acme/first')).ok) problems.push('could not leave the repository as it is');
+        if ((await set('acme/other')).ok) problems.push('the repository was pointed at another one');
+        if ((await set(null)).ok) problems.push('the repository was removed');
+        if (!(await attempt(tx, "update projects set priority = 'P1' where id = $1", [id])).ok) problems.push('other columns of the project could not be changed');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
     id: 'tickets-are-service-only-and-never-visible-to-a-pod',
     async check(db) {
       const problems = [];

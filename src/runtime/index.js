@@ -29,6 +29,9 @@ const { createSupabaseTools } = require('./tools/supabase');
 const { createGitTools } = require('./tools/git');
 const { createMemoryTools } = require('./tools/memory');
 const { createPodTools } = require('./tools/pod');
+const { createPodFileTools } = require('./tools/pod-files');
+const { createContext7Tools } = require('./tools/context7');
+const { createBrowserTools, loadPlaywrightDriver } = require('./tools/browser');
 const { createSearchTools } = require('./tools/search');
 const { createCrmTools } = require('./tools/crm');
 const { createGoogleTools } = require('./tools/google');
@@ -37,6 +40,7 @@ const { createAgentFactory } = require('./agents');
 const { createSalesTeam } = require('./teams/marketing-sales');
 const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
+const { createEngineeringTeam } = require('./teams/engineering');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
@@ -63,7 +67,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -127,7 +131,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   };
   // Pods (step 3.1): a project's own space. The founder approves a card, then the folder, git history, memory note and agents are made.
   // PODS_ROOT (an absolute path) wins over the folder main.js passes; with neither, a pod can be asked for but not opened.
-  const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, isBlocked, onError: () => runtime.emit('pods.error', {}) });
+  const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, allowedRepos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), isBlocked, onError: () => runtime.emit('pods.error', {}) });
   // The Filesystem tools read inside ONE folder: FILESYSTEM_ROOT, or the app's own folder when main.js passes it.
   // With neither there are no filesystem tools (never a default of "the whole disk").
   const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot, podFolder: (podId) => pods.folderFor(podId), podsRoot: env.PODS_ROOT || podsRoot });
@@ -139,12 +143,17 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     ...filesystemTools,
     ...createFetchTools(),
     // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
-    ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
+    ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl, podRepo: (podId) => pods.repoFor(podId) }),
     ...createSupabaseTools({ store }),
     // Tools that work inside ONE pod (step 3.2): its own history, memory and client. The pod is the run's, never an argument; a team gets them only by listing them.
-    ...createGitTools({ podFolder: (podId) => pods.folderFor(podId) }),
+    ...createGitTools({ podFolder: (podId) => pods.folderFor(podId), podRepo: (podId) => pods.repoFor(podId), githubToken: env.GITHUB_TOKEN }),
     ...createMemoryTools({ store }),
     ...createPodTools({ store }),
+    // The Engineering team's own tools (step 3.3): writing a file in the pod's folder, library documentation (CONTEXT7_API_KEY is optional), and a
+    // browser check of a public page (only when Playwright is installed: `npm i playwright && npx playwright install chromium`).
+    ...createPodFileTools({ podFolder: (podId) => pods.folderFor(podId) }),
+    ...createContext7Tools({ apiKey: env.CONTEXT7_API_KEY, fetchImpl }),
+    ...createBrowserTools({ driver: loadPlaywrightDriver() }),
     ...createOutboundTools({ outbound }),
     // The Marketing and Sales team's tools (step 2.3). Search needs TAVILY_API_KEY; Gmail and Drive need all three GOOGLE_*
     // settings (and only read mail, make drafts and save files: nothing sends mail); the lead list is our own `clients` table.
@@ -178,6 +187,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
   // becomes a founder card and marks the ticket escalated.
   const support = createSupportTeam({ factory: agents, store, decisions, writeCard: createModelCardWriter({ router }), outbound, onError: () => runtime.emit('support.error', {}) });
+  // The Engineering team (step 3.3): works one task inside one pod; a merge or a production deploy becomes a founder card tied to the pod.
+  const engineering = createEngineeringTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('engineering.error', {}) });
+  // The phone's follow-up after an answer comes from whichever team filed the card.
+  const answers = { ...support, describeAnswer: async (decision) => (await support.describeAnswer(decision)) ?? (await engineering.describeAnswer(decision)) };
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
@@ -204,7 +217,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     brief,
     teams: teamsOverview,
     sales,
-    support,
+    support: answers,
     audit,
     onError: () => runtime.emit('telegram.error', {}),
   });
@@ -223,6 +236,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     agents,
     sales,
     support,
+    engineering,
     pods,
     problems: [],
 

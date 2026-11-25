@@ -14,8 +14,8 @@ const path = require('node:path');
 const { createApp } = require('../src/runtime');
 
 const ROOT = path.join(__dirname, '..');
-const OPTIONS = { name: 'name', template: 'template', 'client-id': 'clientId', service: 'service', priority: 'priority', deadline: 'deadline', note: 'note' };
-const USAGE = 'Usage: npm run pod -- propose --name "Acme site" --template agency_client|saas_product [--client-id <id>] [--service web_development|ai_automation|marketing|content] [--priority P1|P2|P3] [--deadline 2026-12-31] [--note "…"]\n       npm run pod -- list';
+const OPTIONS = { name: 'name', template: 'template', 'client-id': 'clientId', service: 'service', priority: 'priority', deadline: 'deadline', note: 'note', 'github-repo': 'githubRepo' };
+const USAGE = 'Usage: npm run pod -- propose --name "Acme site" --template agency_client|saas_product [--client-id <id>] [--service web_development|ai_automation|marketing|content] [--priority P1|P2|P3] [--deadline 2026-12-31] [--note "…"] [--github-repo owner/name]\n       npm run pod -- list';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function readProposal(argv) {
@@ -62,7 +62,7 @@ async function main() {
     if (command === 'list') {
       const pods = await app.pods.list();
       if (pods.length === 0) console.log('No project spaces yet.');
-      for (const p of pods) console.log(`${p.name} (${p.template === 'agency_client' ? 'client project' : 'own product'}, ${p.priority}, ${p.status}) in ${p.folder}`);
+      for (const p of pods) console.log(`${p.name} (${p.template === 'agency_client' ? 'client project' : 'own product'}, ${p.priority}, ${p.status}) id ${p.id}, in ${p.folder}`);
     } else {
       await app.pods.propose(proposal);
       console.log('A card is waiting for your answer (in the window and on Telegram). Nothing has been made yet.');

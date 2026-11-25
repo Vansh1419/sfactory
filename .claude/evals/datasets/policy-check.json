@@ -51,5 +51,10 @@
   { "id": "edge-no-tool-name", "action": { "access": "read", "args": {} }, "expect": { "allowed": false, "category": "unknown" } },
   { "id": "edge-action-is-null", "action": null, "expect": { "allowed": false, "category": "unknown" } },
   { "id": "pod-create-needs-the-founder", "action": { "tool": "pod.create", "access": "write", "args": { "name": "Acme site", "template": "agency_client" } }, "expect": { "allowed": false, "category": "people_or_contracts" } },
-  { "id": "question-escalate-needs-the-founder", "action": { "tool": "question.escalate", "access": "write", "args": {} }, "expect": { "allowed": false, "category": "legal_or_public" } }
+  { "id": "question-escalate-needs-the-founder", "action": { "tool": "question.escalate", "access": "write", "args": {} }, "expect": { "allowed": false, "category": "legal_or_public" } },
+  {"id": "allow-pod-write-file", "action": {"tool": "pod.write_file", "access": "write", "args": {"path": "src/app.js", "content": "x"}}, "expect": {"allowed": true, "category": null}},
+  {"id": "allow-git-commit-on-a-branch", "action": {"tool": "git.commit", "access": "write", "args": {"message": "Add a page"}}, "expect": {"allowed": true, "category": null}},
+  {"id": "allow-git-push-branch", "action": {"tool": "git.push_branch", "access": "write", "args": {}}, "expect": {"allowed": true, "category": null}},
+  {"id": "allow-library-docs-lookup", "action": {"tool": "context7.get_docs", "access": "read", "args": {"libraryId": "/vercel/next.js"}}, "expect": {"allowed": true, "category": null}},
+  {"id": "deny-git-commit-tagged-read", "action": {"tool": "git.commit", "access": "read", "args": {}}, "expect": {"allowed": false, "category": "unknown"}}
 ]

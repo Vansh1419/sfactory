@@ -41,7 +41,7 @@ The kickstart's Python/FastAPI/Next.js pieces are replaced so the app stays on t
 | `src/preload.js` | Narrow `window.api` (`decisions.list`, `decisions.resolve`, `agents.pause`, event subscription). No raw `ipcRenderer`. |
 | `src/renderer/` | Dashboard pages and project view (React and Tailwind, bundled by `electron-vite`). Talks only to `window.api`. |
 | `src/shared/` | Types and constants used by runtime and main. |
-| `config/mcp/` | `shared.yaml`, `orchestrator.yaml`, `engineering.yaml`, `marketing_sales.yaml`, `support.yaml`, `finance_ops.yaml` |
+| `config/mcp/` | `shared.yaml`, `orchestrator.yaml`, `product_engineering.yaml`, `marketing_sales.yaml`, `support.yaml`, `finance_ops.yaml` |
 | `.claude/skills/` | `shared/`, plus one folder per team, each skill a `SKILL.md` (kept under `.claude/` with the other Claude documents; an invariant enforces it) |
 
 ### Security constraints to preserve
@@ -293,7 +293,7 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - Scope file and git tools to the pod's folder in the tool layer. Namespace memory per pod. Check row-level security on every pod table.
 - **Done when:** tests show an agent in pod A cannot read pod B's files, repo, memory or client data.
 
-**3.3 Engineering team** (one and a half days)
+**3.3 Engineering team** (one and a half days) — status: **built and tested (Nov 26, 2026)**; migration `20261127000000_pod_repo.sql` written, **not yet applied** to your project (apply it with `npm run db:migrate` when you say so; a pod card that names a GitHub repository needs it). `teams/engineering.js` (lead Kavya, workers Dev and Tess), `config/mcp/product_engineering.yaml`, skills `git-workflow`, `code-review`, `testing` and `deploy-checklist` in `.claude/skills/product_engineering/`, `npm run engineer -- --pod <id> --title "…"`. A pod is tied to one repository from your own list (`GITHUB_REPOS`) on its approved card (`--github-repo owner/name`); in a pod run the GitHub tools work only on that repository. New tools: `pod.write_file`, `git.create_branch`, `git.commit`, `git.push_branch` (a branch only, never the main line, never forced, refused if a key or secret file is staged, the token never on a command line), `pod.info`, `context7.search_library`, `context7.get_docs` (Context7's public API, `CONTEXT7_API_KEY` optional) and `browser.check_page`. **A merge and a production deploy have no tool:** an agent that reaches for either is stopped and a plain card tied to the pod is filed (the Telegram follow-up after your answer says nothing was done). **Built but not proven live:** the browser check is built on Playwright and exists only when it is installed (`npm i playwright && npx playwright install chromium`; it is not in `package.json`); the model-driven run (a real model through the real skills) has not been tried against a real repository; and nothing resumes a task after you approve a card. Evals `engineering-tools` (8) and `engineering-team` (9), one more case in `pod-creation` and two in `database-schema`.
 - Tools: GitHub (pull requests only, never a merge to production), Playwright, Context7.
 - Skills: git-workflow, code-review, testing, deploy-checklist.
 - **Done when:** an agent opens a pull request in a pod repo, and a production deploy attempt becomes a decision card.
