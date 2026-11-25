@@ -75,7 +75,7 @@ function leadTask(lead) {
       ...known,
       '',
       'Steps, in this order:',
-      '1. Scout: find out what the business does and which of our services it may need (search.web, fetch.get). Judge the fit with the ideal-client-profile skill. Check crm.find_lead first, then save the lead with crm.save_lead, with short factual notes and where each fact came from. If it is not a fit, say so and stop: no proposal.',
+      '1. Scout: find out what the business does and which of our services it may need. Judge the fit with the ideal-client-profile skill. Research budget: check crm.find_lead once, read the business\'s own site with at most 3 fetch.get calls (the homepage, then the pages that show what they sell and how to contact them), and use at most 2 search.web calls. Then save the lead ONCE with crm.save_lead, with short factual notes and where each fact came from, and finish at once with your report: do not search again after saving. If it is not a fit, say so and stop: no proposal.',
       '2. Scribe: write the proposal with the proposal-writing and brand-voice skills, and put it into one email to the business address with email.submit. Use only a business address that was given or found on their own website. Never send it any other way.',
       '3. Report: the lead name, the fit, the message id, and whether the email is ready or waiting for the founder. Do not say anything was sent unless email.send confirmed it.',
     ].join('\n'),

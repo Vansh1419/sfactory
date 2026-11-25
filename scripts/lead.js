@@ -17,7 +17,7 @@ const { createApp } = require('../src/runtime');
 const ROOT = path.join(__dirname, '..');
 const OPTIONS = ['company', 'website', 'email', 'price'];
 const SAYS = {
-  done: 'The team finished. The email is waiting for your approval (check the card), or is ready to send.',
+  done: 'The team finished its work.',
   blocked: 'The team could not finish this lead.',
   needs_founder: 'An agent reached something only you can decide. A card is waiting for your answer.',
   failed: 'The lead could not be worked.',
@@ -59,9 +59,18 @@ async function main() {
   }
 
   let code = 0;
+  const startedAt = new Date().toISOString();
   try {
     const result = await app.sales.workLead(lead);
     console.log(SAYS[result.status] ?? 'The lead was worked.');
+    // Say what really exists: an email only counts if the gate saved one during this run.
+    try {
+      const made = (await app.store.select('outbound_messages', { where: { team: 'marketing_sales' }, order: 'created_at.desc', limit: 5 })).filter((m) => m.created_at >= startedAt);
+      if (made.length === 0) console.log('No email was written, so there is no approval card for one.');
+      for (const m of made) console.log(`Email to ${String(m.to_address).split('@').pop()}: ${m.status.replace(/_/g, ' ')}${m.status === 'awaiting_founder' ? ' (a card is waiting for your answer)' : ''}.`);
+    } catch {
+      console.log('Could not check whether an email was written.');
+    }
     if (result.reason) console.log(`Reason: ${result.reason}`);
     if (Array.isArray(result.problems) && result.problems.length > 0) console.log(result.problems.join('\n'));
     for (const out of result.outputs ?? []) console.log(`\n${out.worker}: ${out.output}`);

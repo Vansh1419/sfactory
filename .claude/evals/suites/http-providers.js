@@ -217,11 +217,12 @@ const cases = [
     },
   },
   {
-    id: 'list-keeps-hosted-providers-away-from-sensitive-text-and-caps-claude-code',
+    id: 'list-clears-only-claude-code-for-sensitive-text-and-caps-it',
     check() {
+      // Founder's decision (Nov 25, 2026): Claude Code only, for now. Groq (hosted) and Ollama (can be cloud-hosted) stay away from it.
       const list = build({ GROQ_API_KEY: DUMMY_KEY });
       const get = (n) => list.find((p) => p.name === n);
-      const ok = get('groq').sensitive !== true && get('claude-code').sensitive !== true && get('claude-code').maxConcurrent === 2 && list[list.length - 1].name === 'claude-code';
+      const ok = get('groq').sensitive !== true && get('ollama').sensitive !== true && get('claude-code').sensitive === true && get('claude-code').maxConcurrent === 2 && list[list.length - 1].name === 'claude-code';
       return verdict(ok, JSON.stringify(list.map((p) => [p.name, p.sensitive, p.maxConcurrent])));
     },
   },

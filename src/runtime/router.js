@@ -63,14 +63,17 @@ function validateProviders(list) {
 
 /**
  * The providers the founder starts with, as plain data (no `call`; the wiring adds
- * it). Hosted providers are not allowed to see sensitive text. Claude Code is last
- * and capped because each call carries a fixed overhead and starts a process.
+ * it). A provider may see sensitive text (lead and client details, the review of client
+ * emails) only if it is marked `sensitive: true`. Founder's decision of Nov 25, 2026: only
+ * Claude Code (the founder's own Claude login) for now, to be revisited; Groq (hosted, may
+ * train on inputs) and Ollama (its models can be cloud-hosted) are NOT cleared. Claude Code
+ * is last and capped because each call carries a fixed overhead and starts a process.
  */
 function defaultProviderConfig() {
   return [
     { name: 'groq', model: 'llama-3.3-70b-versatile', tiers: ['cheap', 'strong'], sensitive: false },
     { name: 'ollama', model: 'llama3.1', tiers: ['cheap'], sensitive: false },
-    { name: 'claude-code', model: 'haiku', tiers: ['cheap', 'strong'], sensitive: false, maxConcurrent: CLAUDE_CODE_MAX_CONCURRENT },
+    { name: 'claude-code', model: 'haiku', tiers: ['cheap', 'strong'], sensitive: true, maxConcurrent: CLAUDE_CODE_MAX_CONCURRENT },
   ];
 }
 

@@ -420,11 +420,12 @@ const cases = [
     },
   },
   {
-    id: 'default-config-keeps-hosted-providers-away-from-sensitive-text',
+    id: 'default-config-clears-only-claude-code-for-sensitive-text',
     async check() {
+      // Founder's decision (Nov 25, 2026): Claude Code only, for now. Groq (hosted) and Ollama (can be cloud-hosted) stay away from it.
       const cfg = router().defaultProviderConfig();
-      const hosted = cfg.filter((p) => p.name === 'groq' || p.name === 'claude-code');
-      return verdict(hosted.length === 2 && hosted.every((p) => p.sensitive !== true), JSON.stringify(hosted.map((p) => [p.name, p.sensitive])));
+      const cleared = cfg.filter((p) => p.sensitive === true).map((p) => p.name);
+      return verdict(cleared.join(',') === 'claude-code' && cfg.find((p) => p.name === 'groq')?.sensitive === false && cfg.find((p) => p.name === 'ollama')?.sensitive === false, JSON.stringify(cfg.map((p) => [p.name, p.sensitive])));
     },
   },
   {
