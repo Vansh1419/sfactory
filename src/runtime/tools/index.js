@@ -120,7 +120,9 @@ function createToolLoader({ tools, hasRule, timeoutMs = DEFAULT_TIMEOUT_MS } = {
 
     let result;
     try {
-      result = await withTimeout(def.run({ args, key: request.key }), timeoutMs);
+      // The tool is told which run it belongs to (the team, the agent): a copy, so a tool cannot change the caller's.
+      const context = isObject(request.context) ? structuredClone(request.context) : {};
+      result = await withTimeout(def.run({ args, key: request.key, context }), timeoutMs);
     } catch (err) {
       throw new Error(err?.message === 'timed out' ? 'The tool took too long and was stopped.' : 'The tool failed.');
     }

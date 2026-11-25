@@ -217,6 +217,24 @@ const checks = [
     },
   },
   {
+    id: 'only-the-outbound-service-touches-the-outbound-messages-table',
+    // Every message to a client is saved, reviewed and, while the founder's approval is required, approved before it can be
+    // sent (step 2.2). src/runtime/outbound/service.js is the only code that may read or write the outbound_messages table, so
+    // no other module (a future Gmail tool, an agent's tool) has a way to put a message out without going through the gate.
+    check() {
+      const service = path.join('src', 'runtime', 'outbound', 'service.js');
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => rel !== service)
+        .filter((rel) => /outbound_messages/.test(stripComments(read(rel))));
+      return offenders.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `uses the outbound_messages table outside ${service}: ${offenders.join(', ')}` };
+    },
+  },
+  {
     id: 'evals-doc-in-sync',
     // .claude/EVALS.md must list every suite with its current case count.
     check() {

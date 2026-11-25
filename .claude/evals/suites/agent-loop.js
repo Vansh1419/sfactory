@@ -276,6 +276,17 @@ const cases = [
     },
   },
   {
+    id: 'every-tool-run-is-told-the-agents-team-name-and-id-and-the-model-cannot-change-them',
+    async check() {
+      const seen = [];
+      const t = await team();
+      const tools = { describe: () => t.loader.describe(), run: async (request) => { seen.push(request.context); return { text: 'ok' }; } };
+      const h = await build([JSON.stringify({ action: 'tool', tool: 'docs.create_draft', access: 'write', args: { title: 'x' }, context: { team: 'finance_legal_ops' } }), finish('done')], { tools: { loader: tools, seen: [] } });
+      const r = await h.agent.run(TASK);
+      return verdict(r.status === 'done' && seen.length === 1 && json(seen[0]) === json({ team: 'support', agent: 'Sam', agentId: 'a1111111-1111-4111-8111-111111111111' }), json({ r, seen }));
+    },
+  },
+  {
     id: 'the-lead-tier-and-the-sensitive-setting-are-passed-to-the-router',
     async check() {
       const lead = await build([finish('x')], { tier: 'strong', sensitive: false });

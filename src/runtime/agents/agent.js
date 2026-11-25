@@ -192,7 +192,7 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
 
         let observation;
         try {
-          const out = await tools.run({ action: { tool: toolName, access: action.access, args: action.args }, key: `${task.taskId}:${steps}` });
+          const out = await tools.run({ action: { tool: toolName, access: action.access, args: action.args }, key: `${task.taskId}:${steps}`, context: { team, agent: name, agentId: self.id } });
           observation = typeof out?.text === 'string' && out.text !== '' ? redactDetail(out.text).slice(0, MAX_OBSERVATION_CHARS) : '(no text came back)';
         } catch {
           observation = TOOL_FAILED;

@@ -19,7 +19,7 @@ const TIMEOUT_MS = 8000;
 const TABLES = [
   'clients', 'projects', 'pods', 'agents', 'pod_members', 'tasks',
   'decisions', 'audit_log', 'memory', 'agent_events', 'scaling_rules', 'policy_tools',
-  'graph_checkpoints', 'graph_writes',
+  'graph_checkpoints', 'graph_writes', 'outbound_messages',
 ];
 
 async function checkTable(env, table, fetchImpl = fetch) {

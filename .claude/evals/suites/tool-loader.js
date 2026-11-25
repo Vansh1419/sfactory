@@ -261,6 +261,18 @@ const cases = [
     },
   },
   {
+    id: 'the-tool-gets-a-copy-of-the-runs-context-and-an-odd-context-becomes-an-empty-one',
+    async check() {
+      const seen = [];
+      const loader = makeLoader([tool({ run: async ({ args, context }) => { seen.push(structuredClone(context)); context.team = 'changed by the tool'; return { text: args.text }; } })]);
+      await loader.load();
+      const context = { team: 'support', agent: 'Sam' };
+      await loader.run({ action: act(), key: 'k', context });
+      for (const odd of [undefined, null, 5, 'x', [], () => 1]) await loader.run({ action: act(), key: 'k', context: odd });
+      return verdict(json(seen[0]) === json({ team: 'support', agent: 'Sam' }) && context.team === 'support' && seen.length === 7 && seen.slice(1).every((c) => json(c) === '{}'), json({ context, seen }));
+    },
+  },
+  {
     id: 'a-tool-that-throws-gives-a-generic-error-with-none-of-its-text',
     async check() {
       const loader = makeLoader([tool({ run: async () => { throw new Error(`connection string postgres://user:${SECRET}@host failed`); } })]);

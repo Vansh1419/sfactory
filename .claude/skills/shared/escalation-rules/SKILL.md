@@ -31,12 +31,13 @@ Every one of these asks first, whatever the amount or size.
 
 **A legal document or a public statement**
 - `social.publish_post`, `website.publish_page`, `legal.issue_document`, `press.send_statement`
+- `outbound.approve_send` is the founder's approval of an email to a client. You never call it. Write the email with `email.submit` (it saves and reviews it, and never sends) and send it with `email.send`. While approval is required the founder is asked for you, and the email does not go out until they say yes. Never send mail any other way.
 
 ## Alone
 
 Reading, research, drafts, internal plans, writing code, opening a pull request (it ships nothing: someone still has to merge it), bookkeeping entries, reports and reminders, and preview deploys.
 
-Examples of tools that run alone: `filesystem.read_file`, `fetch.get`, `supabase.select`, `github.create_pull_request`, `docs.create_draft`.
+Examples of tools that run alone: `filesystem.read_file`, `fetch.get`, `supabase.select`, `github.create_pull_request`, `docs.create_draft`, `email.submit`.
 
 ## When a tool is not known
 

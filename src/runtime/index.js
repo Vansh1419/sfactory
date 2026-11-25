@@ -21,6 +21,10 @@ const { BUILTIN_TOOLS } = require('./tools/builtin');
 const { createFilesystemTools } = require('./tools/filesystem');
 const { createFetchTools } = require('./tools/fetch');
 const { createGitHubTools } = require('./tools/github');
+const { createOutbound } = require('./outbound/service');
+const { createReviewer } = require('./outbound/review');
+const { createOutboundTools } = require('./outbound/tools');
+const { parseApprovalUntil } = require('./outbound/settings');
 const { createSupabaseTools } = require('./tools/supabase');
 const { loadToolConfig, selectTools } = require('./tools/config');
 
@@ -33,7 +37,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, additionalTools = [] }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, additionalTools = [], mailSend }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -41,7 +45,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -66,6 +70,24 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     providers: buildProviders({ env, fetchImpl }),
     audit: ({ action, ...detail }) => audit.append({ actorType: 'system', action, detail }),
     sleep,
+  });
+
+  // The outbound gate (step 2.2): every message to a client is saved, reviewed and, while the founder's approval is required,
+  // approved on a card before it can be sent. OUTBOUND_FOUNDER_APPROVAL_UNTIL is the end of the first weeks when the founder
+  // approves every message; unset, garbled or in the future means the founder approves every message. `mailSend` is the mail
+  // transport (the Gmail tools of step 2.3 provide it); with none, nothing can be sent. The review and the cards may be
+  // seen by hosted providers only when the router's sensitive rules allow it (client data is marked sensitive).
+  const approval = parseApprovalUntil(env.OUTBOUND_FOUNDER_APPROVAL_UNTIL);
+  const outbound = createOutbound({
+    store,
+    audit,
+    decisions,
+    review: createReviewer({ router }),
+    writeCard: createModelCardWriter({ router }),
+    send: mailSend,
+    approvalUntil: approval.until,
+    runtime,
+    onError: () => runtime.emit('outbound.error', {}),
   });
 
   // The orchestrator: plans a goal, runs routine actions, and pauses on a card for anything that needs the
@@ -94,6 +116,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
       // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
       ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
       ...createSupabaseTools({ store }),
+      ...createOutboundTools({ outbound }),
     ],
     config: loadToolConfig({ dir: toolConfigDir }),
   });
@@ -141,6 +164,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     router,
     telegram,
     orchestrator,
+    outbound,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -164,6 +188,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
         if (telegramIssue) runtime.emit('telegram.problem', { message: telegramIssue });
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
+        outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed
+        if (approval.problem) runtime.emit('outbound.problem', { message: approval.problem });
         return { ok: true };
       } catch (err) {
         const code = err?.cause?.code ?? 'error';
@@ -176,6 +202,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     async stop() {
       telegram?.stop();
       orchestrator.stop();
+      outbound.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });

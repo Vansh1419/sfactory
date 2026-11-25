@@ -226,10 +226,11 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - **Done when:** a test team of one lead and one worker completes a task, and the lead rejects a bad worker output once.
 - **Done:** `src/runtime/agents/` (skills loader, agent loop, lead, team, factory) with the 10-case `skills-loader`, 19-case `agent-loop` and 21-case `team-framework` evals; the done-when is the first two `team-framework` cases, on a real database. A crucial action stops the agent and is handed back as a request (turning it into a founder card is part of 2.3 and 2.4). Not yet tried with a real model.
 
-**2.2 Outbound review agent** (half a day)
+**2.2 Outbound review agent** (half a day) — status: **done** (Nov 25, 2026; not yet wired to a real mail account: the Gmail tools of 2.3 provide the transport)
 - Every outbound client message goes through a review agent first.
 - A setting makes the founder approve every outbound message for the first 2 weeks.
 - **Done when:** a drafted email cannot be sent without passing review, and the setting forces a decision card.
+- **Done:** `src/runtime/outbound/` (review agent, gate service, email tools, setting), the `outbound_messages` table with its rules enforced by the database, and the 15-case `outbound-review` and 20-case `outbound-gate` evals (plus 5 schema cases and an invariant). The setting is `OUTBOUND_FOUNDER_APPROVAL_UNTIL` (the last day of the first weeks; unset or garbled means the founder approves every message, always). A review can also send a message to the founder whatever the setting. Not yet tried with a real model or a real mail account.
 
 **2.3 Marketing and Sales team** (two days)
 - Tools: Gmail and Drive, HubSpot, one search tool (Exa, Firecrawl or Brave).

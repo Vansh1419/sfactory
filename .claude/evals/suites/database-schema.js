@@ -16,6 +16,11 @@
 //     the tools the founder added to the policy check from Telegram (step 1.6 follow-up): kind 'ask'
 //     (always needs the founder, with a category) or 'routine' (allowed without asking, with a read or
 //     write tag); status proposed, active or removed; service-role only, never visible to a pod
+//   outbound_messages(id, team, to_address, subject, body, content_hash, status, review, decision_id, founder_approval_required)
+//     an outbound client message and where it stands (step 2.2): drafted, review_failed, awaiting_founder, ready,
+//     rejected, sending, sent, send_failed, cancelled. Service-role only. The content is fixed when it is written (the
+//     database computes its hash), a message becomes `ready` only with a passing review and, when the founder's approval
+//     is required, an APPROVED decision, and it is `sent` only after `sending`
 //   pod_id is NULL for company-level rows. Pod agents authenticate as role `authenticated`
 //   with a `pod_id` JWT claim; the runtime uses `service_role`, which bypasses RLS.
 
@@ -23,7 +28,7 @@ const { IDS, EMBEDDING_DIMENSIONS, vec, build, applySeed, getEnv, who, withRole,
 
 const TABLES = [
   'tasks', 'agents', 'decisions', 'audit_log', 'memory', 'clients', 'projects',
-  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes',
+  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes', 'outbound_messages',
 ];
 const POD_ROWS = ['tasks', 'decisions', 'memory', 'agent_events', 'audit_log', 'pod_members'];
 
@@ -32,6 +37,13 @@ const ids = (rows, col = 'id') => rows.map((r) => r[col]).sort();
 const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 const decisionSql = (extraCols = '', extraVals = '') =>
   `insert into decisions (pod_id, category, action, card, status${extraCols}) values ($1, 'spend', $2, $3, $4${extraVals})`;
+
+
+const MESSAGE = "insert into outbound_messages (team, to_address, subject, body, founder_approval_required) values ('marketing_sales', 'client@example.com', 'Your proposal', 'Hello, here it is.', $1) returning id";
+const PASS = JSON.stringify({ verdict: 'pass', problems: [] });
+const FAILED_REVIEW = JSON.stringify({ verdict: 'fail', problems: ['It promises a refund.'] });
+const decisionRow = (status) => `insert into decisions (category, action, card, status${status === 'pending' ? '' : ', resolved_at, resolved_via'}) values ('legal_or_public', $1, $2, '${status}'${status === 'pending' ? '' : ", now(), 'telegram'"}) returning id`;
+const idOf = (r) => r.rows[0].id;
 
 const cases = [
   {
@@ -384,6 +396,185 @@ const cases = [
         await attempt(tx, "update policy_tools set status = 'removed', removed_at = now() where tool = 'acme.read_orders'");
         const again = await attempt(tx, "insert into policy_tools (tool, kind, access, proposed_via) values ('acme.read_orders', 'routine', 'write', 'telegram')");
         if (!again.ok) problems.push(`a removed tool could not be proposed again (${again.error})`);
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'outbound-messages-are-service-only-and-never-visible-to-a-pod',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.service, async (tx) => {
+        const add = await attempt(tx, MESSAGE, [true]);
+        const seen = await attempt(tx, 'select count(*)::int as n from outbound_messages');
+        if (!add.ok || !seen.ok || seen.rows[0].n < 1) problems.push(`control failed: the runtime cannot write and read a message (${add.error ?? seen.error})`);
+      });
+      await withRole(db, who.owner, async (tx) => {
+        await tx.query(MESSAGE, [true]);
+        for (const [name, role, claims] of [['pod', 'authenticated', { pod_id: IDS.podA }], ['no pod claim', 'authenticated', {}], ['anon', 'anon', {}]]) {
+          await tx.query(`set local role ${role}`);
+          await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify(claims)]);
+          const read = await attempt(tx, 'select * from outbound_messages');
+          if (read.ok && read.rows.length > 0) problems.push(`${name} reads outbound messages`);
+          if ((await attempt(tx, MESSAGE, [false])).ok) problems.push(`${name} wrote an outbound message`);
+          const edit = await attempt(tx, "update outbound_messages set status = 'cancelled'");
+          if (edit.ok && edit.count > 0) problems.push(`${name} changed a message`);
+          await tx.query('reset role');
+        }
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'the-content-of-an-outbound-message-is-fixed-and-the-database-computes-its-hash',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const made = await attempt(tx, "insert into outbound_messages (team, to_address, subject, body, content_hash) values ('support', 'a@example.com', 'Subject', E'Line one\nLine two', 'forged') returning id, content_hash, content_hash = encode(sha256(convert_to(to_address || E'\n' || subject || E'\n' || body, 'UTF8')), 'hex') as right_hash");
+        if (!made.ok) {
+          problems.push(`control failed: a message could not be written (${made.error})`);
+          return;
+        }
+        const { id, content_hash: hash, right_hash: rightHash } = made.rows[0];
+        if (hash === 'forged' || rightHash !== true) problems.push('the stored hash is not the one the database computes from the content');
+        for (const [col, value] of [['to_address', "'b@example.com'"], ['subject', "'Another'"], ['body', "'Changed'"], ['team', "'finance_legal_ops'"], ['content_hash', "'0000'"]]) {
+          if ((await attempt(tx, `update outbound_messages set ${col} = ${value} where id = $1`, [id])).ok) problems.push(`${col} could be changed after the message was written`);
+        }
+        const review = await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'review_failed' where id = $1", [id, FAILED_REVIEW]);
+        if (!review.ok) problems.push(`control failed: a review result could not be recorded (${review.error})`);
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-message-becomes-ready-only-with-a-passing-review-and-when-required-an-approved-decision',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const approved = idOf(await tx.query(decisionRow('approved'), [ACTION, CARD]));
+        const rejected = idOf(await tx.query(decisionRow('rejected'), [ACTION, CARD]));
+        const pending = idOf(await tx.query(decisionRow('pending'), [ACTION, CARD]));
+        const ready = (id, extra = '') => attempt(tx, `update outbound_messages set review = coalesce(review, $2::jsonb), status = 'ready' ${extra} where id = $1`, [id, PASS]);
+        const fresh = async (required) => idOf(await tx.query(MESSAGE, [required]));
+
+        // No review at all, and a failed review: never ready.
+        const noReview = await fresh(false);
+        if ((await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [noReview])).ok) problems.push('ready with no review');
+        const failed = await fresh(false);
+        if ((await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [failed, FAILED_REVIEW])).ok) problems.push('ready after a failed review');
+        const odd = await fresh(false);
+        for (const bad of ['{}', '{"verdict":"PASS"}', '{"verdict":true}', '"pass"', '[]']) {
+          if ((await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [odd, bad])).ok) problems.push(`ready with the review ${bad}`);
+        }
+
+        // When the founder's approval is not required, a passing review is enough.
+        const free = await fresh(false);
+        const okFree = await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [free, PASS]);
+        if (!okFree.ok) problems.push(`control failed: a reviewed message that needs no approval could not become ready (${okFree.error})`);
+
+        // A review that passes but says it must go to the founder counts as "approval required" even when the setting is off.
+        const ESCALATED = JSON.stringify({ verdict: 'pass', escalate: true, problems: ['It promises a refund.'] });
+        const esc = await fresh(false);
+        if ((await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [esc, ESCALATED])).ok) problems.push('an escalated message became ready without the founder');
+        const escApproved = await fresh(false);
+        await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [escApproved, approved, ESCALATED]);
+        const escDone = await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [escApproved]);
+        if (!escDone.ok) problems.push(`control failed: an escalated message with an approved decision could not become ready (${escDone.error})`);
+        const escPending = await fresh(false);
+        await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [escPending, pending, ESCALATED]);
+        if ((await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [escPending])).ok) problems.push('an escalated message became ready on a pending decision');
+
+        // When it is required: never straight from drafted, however good the review.
+        const direct = await fresh(true);
+        if ((await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [direct, PASS])).ok) problems.push('ready without the founder although approval is required');
+
+        // awaiting_founder needs a passing review and a decision.
+        const await1 = await fresh(true);
+        if ((await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'awaiting_founder' where id = $1", [await1, PASS])).ok) problems.push('awaiting the founder with no decision');
+        if ((await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [await1, pending, FAILED_REVIEW])).ok) problems.push('awaiting the founder after a failed review');
+        const into = await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [await1, pending, PASS]);
+        if (!into.ok) problems.push(`control failed: a reviewed message could not wait for the founder (${into.error})`);
+        if ((await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [await1])).ok) problems.push('ready while the decision is still pending');
+
+        // The decision must be an APPROVED one.
+        const rej = await fresh(true);
+        await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [rej, rejected, PASS]);
+        if ((await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [rej])).ok) problems.push('ready on a rejected decision');
+        const yes = await fresh(true);
+        await attempt(tx, "update outbound_messages set review = $3::jsonb, decision_id = $2, status = 'awaiting_founder' where id = $1", [yes, approved, PASS]);
+        const done = await attempt(tx, "update outbound_messages set status = 'ready' where id = $1", [yes]);
+        if (!done.ok) problems.push(`control failed: an approved message could not become ready (${done.error})`);
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'an-outbound-message-only-moves-forward-and-is-sent-only-after-sending',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const fresh = async () => idOf(await tx.query(MESSAGE, [false]));
+        const go = (id, status, extra = '') => attempt(tx, `update outbound_messages set status = '${status}' ${extra} where id = $1`, [id]);
+        const readyOne = async () => {
+          const id = await fresh();
+          await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'ready' where id = $1", [id, PASS]);
+          return id;
+        };
+
+        const a = await readyOne();
+        if ((await go(a, 'sent', ', sent_at = now()')).ok) problems.push('sent without sending first');
+        const toSending = await go(a, 'sending');
+        if (!toSending.ok) problems.push(`control failed: ready could not go to sending (${toSending.error})`);
+        if ((await go(a, 'ready')).ok) problems.push('sending went back to ready');
+        const sent = await go(a, 'sent', ', sent_at = now()');
+        if (!sent.ok) problems.push(`control failed: sending could not go to sent (${sent.error})`);
+        for (const next of ['sending', 'ready', 'send_failed', 'cancelled', 'drafted']) if ((await go(a, next)).ok) problems.push(`sent went to ${next}`);
+        if ((await attempt(tx, 'delete from outbound_messages where id = $1', [a])).ok) problems.push('a message was deleted');
+
+        const b = await readyOne();
+        await go(b, 'sending');
+        const failed = await go(b, 'send_failed');
+        if (!failed.ok) problems.push(`control failed: sending could not go to send_failed (${failed.error})`);
+        for (const next of ['ready', 'sending', 'sent']) if ((await go(b, next)).ok) problems.push(`send_failed went to ${next}`);
+
+        const c = await fresh();
+        for (const next of ['sent', 'sending']) if ((await go(c, next)).ok) problems.push(`drafted went to ${next}`);
+        await attempt(tx, "update outbound_messages set review = $2::jsonb, status = 'review_failed' where id = $1", [c, FAILED_REVIEW]);
+        if ((await go(c, 'ready')).ok) problems.push('review_failed went to ready');
+        if (!(await go(c, 'cancelled')).ok) problems.push('review_failed could not be cancelled');
+        if ((await go(c, 'drafted')).ok) problems.push('cancelled came back');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'an-outbound-message-must-be-one-recipient-one-line-subject-and-a-body-of-sensible-size',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const add = (to, subject, body) => attempt(tx, "insert into outbound_messages (team, to_address, subject, body) values ('support', $1, $2, $3)", [to, subject, body]);
+        const good = await add('person@example.co.in', 'A subject', 'A body.');
+        if (!good.ok) problems.push(`control failed: a good message was refused (${good.error})`);
+        const bad = [
+          ['two recipients', 'a@example.com, b@example.com', 's', 'b'],
+          ['two recipients with a semicolon', 'a@example.com;b@example.com', 's', 'b'],
+          ['a name and an address', 'Ann <a@example.com>', 's', 'b'],
+          ['a line break in the recipient (header injection)', 'a@example.com\r\nBcc: x@example.com', 's', 'b'],
+          ['no at sign', 'example.com', 's', 'b'],
+          ['an empty recipient', '', 's', 'b'],
+          ['a line break in the subject', 'a@example.com', 'Hi\r\nBcc: x@example.com', 'b'],
+          ['an empty subject', 'a@example.com', '', 'b'],
+          ['a very long subject', 'a@example.com', 'x'.repeat(301), 'b'],
+          ['an empty body', 'a@example.com', 's', ''],
+          ['a very long body', 'a@example.com', 's', 'x'.repeat(20_001)],
+          ['an unknown team', 'a@example.com', 's', 'b', 'sales'],
+        ];
+        for (const [what, to, subject, body, team] of bad) {
+          const r = team
+            ? await attempt(tx, "insert into outbound_messages (team, to_address, subject, body) values ($4, $1, $2, $3)", [to, subject, body, team])
+            : await add(to.replace(/\\r\\n/g, '\r\n'), subject.replace(/\\r\\n/g, '\r\n'), body);
+          if (r.ok) problems.push(`accepted ${what}`);
+        }
       });
       return verdict(problems.length === 0, problems.join('; '));
     },

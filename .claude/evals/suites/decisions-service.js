@@ -88,7 +88,8 @@ function env() {
 async function setup({ failAudit = false, blocked = null } = {}) {
   const { DecisionError, createDecisionService } = loadSubject(DECISIONS);
   const { fake, store, createAudit } = await env();
-  await fake.db.query('truncate table public.decisions');
+  // outbound_messages points at decisions, so both are emptied together
+  await fake.db.query('truncate table public.decisions, public.outbound_messages');
 
   const state = { failAudit, blocked, now: null };
   const log = [];

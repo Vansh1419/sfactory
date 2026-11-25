@@ -36,13 +36,13 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 72 | 100% | 1.8 | pass |
-| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 25 | 100% | 1.1 | pass |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 30 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
 | `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 33 | 100% | 1.7d | pass |
 | `orchestrator-model` | `src/runtime/orchestrator/model.js` (the model-written planner and card writer), with a scripted router | 26 | 100% | 1.7e | pass |
 | `approval-queue` | `src/renderer/queue.mjs` (the logic behind the approval queue screen) | 28 | 100% | 1.9 | pass |
-| `tool-loader` | `src/runtime/tools/{index,builtin,files}.js` | 29 | 100% | 1.10 (loader) | pass |
+| `tool-loader` | `src/runtime/tools/{index,builtin,files}.js` | 30 | 100% | 1.10 (loader) | pass |
 | `zip-file` | `src/renderer/zip.mjs` (the .zip the Download button makes) | 9 | 100% | 1.10 follow-up | pass |
 | `filesystem-tools` | `src/runtime/tools/filesystem.js` (read a file or list a folder inside the project folder) | 21 | 100% | 1.10 (Filesystem) | pass |
 | `tool-config` | `src/runtime/tools/config.js` (shared.yaml plus a team file) | 19 | 100% | 1.10 (config) | pass |
@@ -53,8 +53,10 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `shared-skills` | `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` | 9 | 100% | 1.10 (skills) | pass |
 | `phase1-gate` | `scripts/gate1.js` (Gate 1, also run by hand with `npm run gate:1`) | 3 | 100% | 1.11 | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
-| `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 19 | 100% | 2.1 | pass |
+| `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
 | `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 21 | 100% | 2.1 | pass |
+| `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
+| `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 20 | 100% | 2.2 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -68,7 +70,7 @@ Update the "Today" column when a suite's status changes.
 
 Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check function in the suite file. Runs against the repo today.
 
-**Cases:** 13
+**Cases:** 14
 
 | Case | Rule it protects |
 |---|---|
@@ -282,7 +284,7 @@ Checked by mutation on Nov 24, 2026: 10 mistakes were introduced one at a time (
 
 Suite: `.claude/evals/suites/tool-loader.js`. No dataset. Code under test: `src/runtime/tools/index.js` (`createToolLoader`) and `src/runtime/tools/builtin.js` (the draft tool).
 
-**Cases:** 29
+**Cases:** 30
 
 Why it exists: step 1.10 says a tool with no policy rule must never load, and tasks need a way to hand text back to the founder (for example a script asked for through Telegram).
 
@@ -408,7 +410,7 @@ Covers: shared skills first then the team's own, never another team's; a team na
 
 Suite: `.claude/evals/suites/agent-loop.js`. Code under test: `src/runtime/agents/agent.js` (`createAgent`). A scripted model, the real policy and the real tool loader.
 
-**Cases:** 19
+**Cases:** 20
 
 Covers: one JSON action per model call (a tool, or finish); the first prompt holds the role, the skills, the team's tools and the task; a tool result comes back fenced as data; a tool the team does not have, or nobody has heard of, is not run and the agent is told; **an action the policy says needs the founder is never run: the agent stops and hands the request back**; step and token caps and clamped limits; garbage answers are steps and three in a row fail the run; a model that cannot be reached stops the run without throwing; a tool run is audited before it runs as this agent and an audit failure stops the run; secrets never reach a prompt, the audit log or the output; a failing tool's own text is never shown; long results and outputs are cut; the task and feedback are data in random fences; a bad task never throws or calls the model; the lead uses the strong tier and the sensitive setting reaches the router; one run uses one router task id.
 
@@ -421,6 +423,26 @@ Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/a
 The step 2.1 "done when" is the first two cases: a team of one lead and one worker completes a task (queued, in_progress, in_review, done, with the lead's review before done), and **the lead rejects a bad worker output once, the worker tries again with the feedback in its prompt, and the task is done**. Also: rejected twice blocks the task with a reason and it is never done; a review that is not a plain `accept: true` (yes, "true", 1, `{}`, garbage, no answer) counts as a rejection; zero allowed revisions blocks at the first rejection; a plan naming an unknown worker, empty, too long or garbled runs no worker and blocks the task; a two-subtask plan runs in order and stops at the first block; a worker that needs the founder blocks the task and hands the request back, a worker that stops or fails blocks it with a plain reason; every status change is audited before it is made and an audit failure leaves the status where it was; the audit log has the task from creation to done in order; agents are registered once with the right role and tier; a task with no or an odd title is refused with no row and no model call; a secret in a task is never stored or logged. The factory: builds a team from `shared` plus its own tools and skills and no other team's, refuses to build without the company charter, refuses unknown teams and odd names, reports config problems, never gives a team a tool with no policy rule, and passes its limits to every agent.
 
 Checked by mutation on Nov 25, 2026: 14 deliberate breaks (a task done without the lead accepting, a truthy review counting as yes, status changes not audited, an unknown worker allowed in a plan, a crucial action run instead of handed back, the tool run not audited first, no step cap, tool output and final output not cleaned of secrets, no charter required, another team's tools loaded, the feedback not sent back, unlimited revisions, any team name reaching a folder), all caught.
+
+### outbound-review
+
+Suite: `.claude/evals/suites/outbound-review.js`. Code under test: `src/runtime/outbound/review.js` (`checkMessage`, `createReviewer`) and `settings.js` (`parseApprovalUntil`, `approvalRequired`). A scripted model.
+
+**Cases:** 15
+
+Covers: **code checks that cannot be argued with** (one recipient, a one-line subject, a body of sensible size, nothing that looks like a key, no unfinished placeholder text such as `[Name]` or `TODO`); a message that fails them never reaches a model. The **model review can only make it stricter**: only a plain `"pass"` passes, `escalate` means the founder must decide, and an odd answer, `PASS`, `true`, a pass that lists problems (a contradiction), no answer or a model that cannot be reached is a **fail**. The message is data in a random fence and the review is told what to look for (promises, legal or public statements, keys, claiming to be human). **The founder-approval setting fails safe**: `OUTBOUND_FOUNDER_APPROVAL_UNTIL` unset, empty, garbled or in the future means the founder approves every message; a date on its own means the end of that day in India; only a date that has clearly passed ends the period.
+
+### outbound-gate
+
+Suite: `.claude/evals/suites/outbound-gate.js`. Code under test: `src/runtime/outbound/service.js` (`createOutbound`) and `tools.js` (`email.submit`, `email.send`), the table `outbound_messages` (migration `20261125000000_outbound_messages.sql`). Real Postgres with the real migrations; the policy, decisions service, runtime event bus and reviewer are real (its model is scripted); the mail transport is a fake that records what it is asked to send.
+
+**Cases:** 20
+
+The step 2.2 "done when": **a drafted email cannot be sent without passing review, and the setting forces a decision card.** A message that was never reviewed, or whose review failed, can never be sent. With no end date set (or one in the future) a reviewed email files a card (category legal or public, the email text under "Show details") and is not sent; approving the card makes it ready and the STORED text is sent exactly once; rejecting it means it is never sent; answering a second time changes nothing. Once the period is over a passing review is enough and no card is filed, except when the review itself says the founder must decide. A card that cannot be written cancels the message. An approval given while the app was closed is applied on start. Sending twice at the same moment sends once; a failing mail transport leaves `send_failed` and is never retried; with no mail account nothing is sent. Every step is audited before it is made, in order, and the audit log never holds an address or a body (only the recipient's domain). The email tools take the team from the run, never from the model.
+
+The database enforces the same rules (5 cases in `database-schema`): the table is service-only; the content is fixed and the database computes its hash; a message becomes `ready` only with a passing review and, when approval is required (the setting, or a review that says it must go to the founder), an APPROVED decision; it is `sent` only after `sending`; one recipient, a one-line subject and a sensible size. The invariant `only-the-outbound-service-touches-the-outbound-messages-table` keeps any other module (a future Gmail tool) from writing to the table.
+
+Checked by mutation on Nov 25, 2026: 15 deliberate breaks in the service, review, setting and migration; 14 caught outright, and the 15th (ready straight from drafted) is a redundant check, because the "approved decision" rule refuses the same case.
 
 ### goals-view
 
@@ -486,7 +508,7 @@ Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (a
 
 Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
 
-**Cases:** 25
+**Cases:** 30
 
 How it works: the migrations are applied, in filename order, to a real Postgres running inside the test (PGlite, which is PostgreSQL 18, with pgvector). It is dressed like Supabase: the `anon`, `authenticated` and `service_role` roles, an `auth.jwt()` that reads the request's claims, and Supabase's default grants (which the migrations must take back). A fixture creates two pods with rows in every table. Each case then acts as someone specific (a pod agent with a `pod_id` claim, no claim, `anon`, the runtime's `service_role`, or the table owner) and tries things, always inside a transaction that is rolled back. Attack cases include a positive control (the same action on the pod's own data must succeed) so a case cannot pass just because everything is blocked. The contract (tables and columns the fixture inserts into) is in the header of the suite file.
 

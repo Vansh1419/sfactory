@@ -60,6 +60,10 @@ const RULES = new Map([
   ['website.publish_page', { ask: CATEGORIES.LEGAL }],
   ['legal.issue_document', { ask: CATEGORIES.LEGAL }],
   ['press.send_statement', { ask: CATEGORIES.LEGAL }],
+  // The founder's approval of an outbound client message (step 2.2). There is no tool of this name: it only exists so the
+  // decision card for a reviewed message can be filed. Sending itself is `email.send`, which sends only a message that is
+  // ready (reviewed and, while the setting says so, approved on that card).
+  ['outbound.approve_send', { ask: CATEGORIES.LEGAL }],
 
   // Routine work: reading, internal drafts and records, pull requests (opening
   // one ships nothing), preview deploys.
@@ -73,6 +77,10 @@ const RULES = new Map([
   ['zoho_books.create_bookkeeping_entry', { access: 'write' }],
   ['hubspot.update_lead_stage', { access: 'write' }],
   ['docs.create_draft', { access: 'write' }],
+  // Outbound email (step 2.2). Both are routine for the policy because the gate is INSIDE the tools: `email.submit` writes
+  // the message and has it reviewed, and `email.send` sends only a stored message that is ready. No other tool may send mail.
+  ['email.submit', { access: 'write' }],
+  ['email.send', { access: 'write' }],
 ]);
 
 /** Only an exact "preview" target is routine. A missing or odd target is treated as production. */
