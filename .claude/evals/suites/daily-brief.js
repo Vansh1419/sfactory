@@ -93,6 +93,33 @@ const cases = [
     },
   },
   {
+    // Step 2.x follow-up (Nov 26, 2026): "Waiting for you" gave only counts, so a card waiting for days could hide behind a number.
+    id: 'waiting-cards-are-listed-one-by-one-oldest-first-with-their-kind-and-how-long-they-have-waited-up-to-five-then-a-count',
+    async check() {
+      const ago = (ms) => new Date(NOW.getTime() - ms).toISOString();
+      const card = (decide) => ({ decide, why_now: 'SECRET WHY', if_yes: 'SECRET YES' });
+      const b = await briefOf({ decisions: [
+        { status: 'pending', category: 'spend', card: card('Pay the freelancer?'), created_at: ago(50 * 3_600_000) },
+        { status: 'pending', category: 'legal_or_public', card: card('Send the email to Acme?'), created_at: ago(5 * 3_600_000) },
+        { status: 'pending', category: 'launch_or_pricing', card: card('Change the price?'), created_at: ago(20 * 60_000) },
+        { status: 'pending', category: 'people_or_contracts', card: card('Hire a designer?'), created_at: ago(60_000) },
+        { status: 'pending', category: 'mystery', card: card(`<b>Odd</b>\u0007 ${'x'.repeat(300)}`), created_at: ago(30_000) },
+        { status: 'pending', category: 'spend', card: card('Sixth card?'), created_at: ago(20_000) },
+        { status: 'pending', category: 'spend', card: card('Seventh card?'), created_at: ago(10_000) },
+        { status: 'pending', category: 'spend', card: {}, created_at: ago(5_000) },
+      ] });
+      const lines = section(b, 'waiting').lines;
+      const few = await briefOf({ decisions: [{ status: 'pending', category: 'spend', card: card('Only one?'), created_at: ago(2 * 3_600_000) }] });
+      const noCard = await briefOf({ decisions: [{ status: 'pending', category: 'spend', created_at: ago(1000) }] });
+      return verdict(lines[0].startsWith('8 decisions are waiting for your answer: 4 about spending money')
+        && lines[1] === 'Pay the freelancer? (spending money, waiting 2 days)' && lines[2] === 'Send the email to Acme? (a legal or public matter, waiting 5 hours)' && lines[3] === 'Change the price? (a launch or a price, waiting 20 minutes)'
+        && lines[4] === 'Hire a designer? (people or contracts, waiting 1 minute)' && /^<b>Odd<\/b> x+ \(something new, waiting just filed\)$/.test(lines[5]) && lines[5].length <= 200 && !/[\u0000-\u001f]/.test(lines[5])
+        && lines[6] === '...and 3 more in the approval queue.' && /^\d+ tasks? (is|are) blocked|^No tasks are blocked/.test(lines[7]) && !lines.join(' ').includes('SECRET')
+        && section(few, 'waiting').lines[1] === 'Only one? (spending money, waiting 2 hours)' && !section(few, 'waiting').lines.join(' ').includes('more in the approval queue')
+        && section(noCard, 'waiting').lines.length === 2 && !section(noCard, 'waiting').lines.join(' ').includes('more in the approval queue'), json(lines));
+    },
+  },
+  {
     id: 'leads-are-counted-with-the-new-ones-of-the-last-24-hours-and-the-latest-names-as-text',
     async check() {
       const nasty = `<b>Acme</b>\u0007 & "Co" ${'x'.repeat(100)}`;

@@ -40,6 +40,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DEFAULTS = Object.freeze({ remindAfterMs: 4 * HOUR_MS, maxReminders: 6, remindLimit: 100, remindEveryMs: 60 * 1000 });
 const MAX_TRANSITION_ROUNDS = 3;
 const SUMMARY_LIMIT = 200;
+const SUMMARY_QUESTION_CHARS = 160;
 
 /** An error with a safe code and message that may be shown to the founder. */
 class DecisionError extends Error {
@@ -342,9 +343,9 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
   }
 
   /**
-   * What the daily brief needs, read only (step 2.6): the cards waiting for the founder (their kind and any amounts) and what was decided since
-   * a moment (the kind and the answer). Never a card's text, an action or an id. The brief reads decisions only through here, so this service
-   * stays the one place that knows how a decision's status and resolution are stored.
+   * What the daily brief needs, read only (step 2.6): the cards waiting for the founder (their kind, any amounts, the one-sentence question each asks
+   * and when it was filed) and what was decided since a moment (the kind and the answer). Never a card's details, its other fields, an action or an
+   * id. The brief reads decisions only through here, so this service stays the one place that knows how a decision's status and resolution are stored.
    */
   async function summary({ since } = {}) {
     ensureRunning();
@@ -353,7 +354,13 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
     const approved = await store.select('decisions', { where: { status: 'approved' }, order: 'resolved_at.desc', limit: SUMMARY_LIMIT });
     const rejected = await store.select('decisions', { where: { status: 'rejected' }, order: 'resolved_at.desc', limit: SUMMARY_LIMIT });
     return {
-      waiting: waiting.map((d) => ({ category: d.category, amountInr: d.amount_inr ?? null, amountUsd: d.amount_usd ?? null })),
+      waiting: waiting.map((d) => ({
+        category: d.category,
+        amountInr: d.amount_inr ?? null,
+        amountUsd: d.amount_usd ?? null,
+        question: typeof d.card?.decide === 'string' ? d.card.decide.replace(/\s+/g, ' ').trim().slice(0, SUMMARY_QUESTION_CHARS) : '',
+        createdAt: d.created_at ?? null,
+      })),
       decided: [...approved, ...rejected]
         .filter((d) => !Number.isNaN(sinceMs) && Date.parse(d.resolved_at) >= sinceMs)
         .map((d) => ({ category: d.category, status: d.status })),

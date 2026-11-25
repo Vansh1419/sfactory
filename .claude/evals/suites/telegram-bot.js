@@ -81,7 +81,7 @@ const decision = (over = {}) => ({
 const unknownDecision = () => decision({ id: ID2, category: 'unknown', action: { tool: 'newtool.run', access: 'write', args: {} } });
 
 /** Bot plus fakes that record everything. */
-function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false, orchestrator, briefText } = {}) {
+function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false, orchestrator, briefText, statusText, sales, support } = {}) {
   const sent = [];
   const edits = [];
   const answers = [];
@@ -137,7 +137,7 @@ function harness({ resolve, policy = {}, rows, editFails = false, answerFails = 
       return { id: ID2, tool: a.tool, status: 'removed', changed: true, conflict: false, inEffect: true };
     },
   };
-  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, orchestrator, briefText, onError: (e) => errors.push(e) });
+  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, orchestrator, briefText, statusText, sales, support, onError: (e) => errors.push(e) });
   return { bot, sent, edits, answers, calls, errors };
 }
 
@@ -795,11 +795,122 @@ const cases = [
 
   // ---- Other commands ---------------------------------------------------------
   {
-    id: 'status-and-pause-say-they-are-not-available-yet-and-call-nothing',
+    id: 'pause-says-it-is-not-available-yet-and-calls-nothing',
     async check() {
       const h = harness();
-      for (const body of ['/status sales', '/pause agent-1']) await h.bot.handleUpdate(text(FOUNDER, body));
-      return verdict(h.sent.length === 2 && h.sent.every((m) => /not available yet/i.test(m.text)) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+      await h.bot.handleUpdate(text(FOUNDER, '/pause agent-1'));
+      return verdict(h.sent.length === 1 && /not available yet/i.test(h.sent[0].text) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+    },
+  },
+  {
+    // /status (Nov 26, 2026) shows the same overview as the window's Teams page; the bot only passes the words after the command on.
+    id: 'status-sends-the-team-status-for-the-words-after-the-command-as-plain-text-and-calls-nothing-else',
+    async check() {
+      const asked = [];
+      const h = harness({ statusText: async (query) => { asked.push(query); return `STATUS for [${query}] <b>x</b>`; } });
+      await h.bot.handleUpdate(text(FOUNDER, '/status'));
+      await h.bot.handleUpdate(text(FOUNDER, '/status sales'));
+      await h.bot.handleUpdate(text(FOUNDER, '/status  Customer   Support '));
+      return verdict(asked.length === 3 && asked[0] === '' && asked[1] === 'sales' && asked[2].replace(/\s+/g, ' ').trim() === 'Customer Support' && h.sent.length === 3
+        && h.sent[1].text === 'STATUS for [sales] <b>x</b>' && h.sent.every((m) => m.chatId === FOUNDER && !m.buttons && m.parseMode === undefined) && h.calls.length === 0, JSON.stringify({ asked, sent: h.sent.map((m) => m.text) }));
+    },
+  },
+  {
+    // /lead and /ticket (Nov 26, 2026) start the sales and support teams from the phone. They run in the background like /goal and the result arrives
+    // as a second message; any email or reply the team writes arrives as its own card.
+    id: 'lead-picks-the-address-and-email-out-of-the-words-answers-at-once-and-reports-the-result-later-while-the-bot-keeps-answering',
+    async check() {
+      const calls = [];
+      let finish;
+      const sales = { workLead: (lead) => { calls.push(lead); return new Promise((resolve) => { finish = resolve; }); } };
+      const h = harness({ sales });
+      await h.bot.handleUpdate(text(FOUNDER, '/lead Acme  Online Shoes hello@acme-shoes.example https://acme-shoes.example/'));
+      const ack = h.sent.length;
+      await h.bot.handleUpdate(text(FOUNDER, '/help')); // the bot answers while the team works
+      const answeredMeanwhile = h.sent.length === ack + 1;
+      finish({ status: 'done', taskId: 't1', outputs: [] });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      return verdict(calls.length === 1 && calls[0].website === 'https://acme-shoes.example/' && calls[0].email === 'hello@acme-shoes.example' && calls[0].company === 'Acme Online Shoes' && Object.keys(calls[0]).length === 3 && /Working on it/.test(h.sent[0].text) && answeredMeanwhile
+        && /The sales team finished\. If it wrote a proposal email, it is waiting for you as a card/.test(h.sent.at(-1).text) && h.sent.every((m) => m.chatId === FOUNDER), json({ calls, sent: h.sent.map((m) => m.text.slice(0, 50)) }));
+    },
+  },
+  {
+    id: 'lead-explains-what-is-missing-limits-how-many-run-at-once-says-why-a-lead-failed-and-never-shows-error-text',
+    async check() {
+      const json = JSON.stringify;
+      const none = harness();
+      await none.bot.handleUpdate(text(FOUNDER, '/lead Acme'));
+      const usage = harness({ sales: { workLead: async () => ({ status: 'done' }) } });
+      await usage.bot.handleUpdate(text(FOUNDER, '/lead'));
+      await usage.bot.handleUpdate(text(FOUNDER, '/lead https://only-a-site.example hello@x.example'));
+      const releases = [];
+      const busy = harness({ sales: { workLead: () => new Promise((resolve) => releases.push(resolve)) } });
+      for (const name of ['One', 'Two', 'Three']) await busy.bot.handleUpdate(text(FOUNDER, `/lead ${name}`));
+      const third = busy.sent.at(-1).text;
+      const reasons = harness({ sales: { workLead: async () => ({ status: 'failed', reason: 'bad_lead', problems: ['The email address is not valid.'] }) } });
+      await reasons.bot.handleUpdate(text(FOUNDER, '/lead Acme not-an-email@'));
+      const blocked = harness({ sales: { workLead: async () => ({ status: 'blocked', taskId: 't', reason: 'The lead did not accept the work after 2 tries.' }) } });
+      await blocked.bot.handleUpdate(text(FOUNDER, '/lead Acme'));
+      const needs = harness({ sales: { workLead: async () => ({ status: 'needs_founder', taskId: 't', decisionId: 'd' }) } });
+      await needs.bot.handleUpdate(text(FOUNDER, '/lead Acme'));
+      const failing = harness({ sales: { workLead: async () => { throw new Error('connection to db.internal failed sb_secret_ABCDEFGHIJKLMNOP'); } } });
+      await failing.bot.handleUpdate(text(FOUNDER, '/lead Acme'));
+      let started = 0;
+      const guarded = harness({ sales: { workLead: async () => { started += 1; return { status: 'done' }; } } });
+      await guarded.bot.handleUpdate(text(STRANGER, '/lead Acme'));
+      await guarded.bot.handleUpdate(text(FOUNDER, '/lead Acme', STRANGER));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      const last = (h) => h.sent.at(-1).text;
+      releases.forEach((r) => r({ status: 'done' }));
+      return verdict(none.sent[0].text === 'The sales team is not available right now.' && /^Usage: \/lead <company>/.test(usage.sent[0].text) && /^Usage: \/lead <company>/.test(usage.sent[1].text)
+        && busy.sent.length === 3 && /already running 2 team jobs/.test(third) && releases.length === 2
+        && /could not use that lead\. The email address is not valid\./.test(last(reasons)) && /^The team could not finish\. The lead did not accept the work after 2 tries\.$/.test(last(blocked)) && /needs your decision.*Nothing was sent to anyone/.test(last(needs))
+        && !/db\.internal|sb_secret/.test(failing.sent.map((m) => m.text).join(' ')) && failing.sent.length === 2 && started === 0 && guarded.sent.length === 0, json({ none: none.sent[0].text, third, reasons: last(reasons), failing: failing.sent.map((m) => m.text) }));
+    },
+  },
+  {
+    id: 'ticket-works-the-oldest-open-ticket-or-the-one-named-and-says-how-it-ended',
+    async check() {
+      const json = JSON.stringify;
+      const calls = [];
+      const support = {
+        workNext: async () => { calls.push(['next']); return { status: 'done', taskId: 't', ticket: 'answered' }; },
+        workTicket: async (a) => { calls.push(['ticket', a]); return a.ticketId.startsWith('aaaaaaaa') ? { status: 'failed', reason: 'not_available' } : { status: 'needs_founder', taskId: 't', decisionId: 'd' }; },
+      };
+      const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const other = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const h = harness({ support });
+      await h.bot.handleUpdate(text(FOUNDER, '/ticket'));
+      await h.bot.handleUpdate(text(FOUNDER, `/ticket ${id}`));
+      await h.bot.handleUpdate(text(FOUNDER, `/ticket ${other}`));
+      await h.bot.handleUpdate(text(FOUNDER, '/ticket not-an-id'));
+      for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      const texts = h.sent.map((m) => m.text);
+      const none = harness({ support: { workNext: async () => ({ status: 'none' }), workTicket: async () => ({ status: 'done' }) } });
+      await none.bot.handleUpdate(text(FOUNDER, '/ticket'));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      const missing = harness();
+      await missing.bot.handleUpdate(text(FOUNDER, '/ticket'));
+      return verdict(json(calls) === json([['next'], ['ticket', { ticketId: id }], ['ticket', { ticketId: other }]]) && texts.some((t) => /support team answered the ticket.*Nothing was sent to the customer/.test(t)) && texts.some((t) => /not open any more/.test(t)) && texts.some((t) => /needs your decision/.test(t))
+        && texts.some((t) => /^Usage: \/ticket/.test(t)) && none.sent.at(-1).text === 'There are no open tickets.' && missing.sent[0].text === 'The support team is not available right now.', json({ calls, texts }));
+    },
+  },
+  {
+    id: 'status-without-an-overview-says-it-is-not-available-a-failure-gives-no-error-text-and-a-stranger-gets-nothing',
+    async check() {
+      const none = harness();
+      await none.bot.handleUpdate(text(FOUNDER, '/status'));
+      const failing = harness({ statusText: async () => { throw new Error('connection to db.internal failed sb_secret_ABCDEFGHIJKLMNOP'); } });
+      await failing.bot.handleUpdate(text(FOUNDER, '/status support'));
+      let asked = 0;
+      const guarded = harness({ statusText: async () => { asked += 1; return 'SECRET STATUS'; } });
+      await guarded.bot.handleUpdate(text(STRANGER, '/status'));
+      await guarded.bot.handleUpdate(text(FOUNDER, '/status', STRANGER));
+      const shown = failing.sent.map((m) => m.text).join(' ');
+      return verdict(none.sent.length === 1 && none.sent[0].text === 'The team status is not available right now.' && failing.sent.length === 1 && !/db\.internal|sb_secret/.test(shown) && shown.length > 0 && asked === 0 && guarded.sent.length === 0, JSON.stringify({ none: none.sent.map((m) => m.text), failing: shown, asked }));
     },
   },
   {

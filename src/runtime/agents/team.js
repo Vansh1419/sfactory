@@ -56,6 +56,27 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
   };
   const revisions = Number.isInteger(maxRevisions) && maxRevisions >= 0 ? Math.min(maxRevisions, ABSOLUTE_MAX_REVISIONS) : DEFAULT_MAX_REVISIONS;
 
+  /** Move an agent between two states, only if it is in the first. A display hint: it never stops a task, and a paused agent is left alone. */
+  async function mark(agent, from, to) {
+    if (!agent?.id) return;
+    try {
+      const rows = await store.update('agents', { id: agent.id, status: from }, { status: to });
+      if (Array.isArray(rows) && rows.length > 0) changed();
+    } catch {
+      // The Teams page showing a stale status is not a reason to stop work.
+    }
+  }
+
+  /** Show an agent as working while it works, and idle again after, whatever happens. */
+  async function busy(agent, work) {
+    await mark(agent, 'idle', 'working');
+    try {
+      return await work();
+    } finally {
+      await mark(agent, 'working', 'idle');
+    }
+  }
+
   /** Give every agent a row in `agents`, once: a second call finds the rows and changes nothing. */
   async function register() {
     const members = [{ agent: lead, role: 'team_lead', tier: 'strong' }, ...Object.values(workers).map((agent) => ({ agent, role: 'worker', tier: 'cheap' }))];
@@ -113,7 +134,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
       current = 'queued';
       changed();
 
-      const planned = await lead.plan({ taskId, title, description: description ?? '' });
+      const planned = await busy(lead, () => lead.plan({ taskId, title, description: description ?? '' }));
       if (!planned.ok) return await block(planned.reason === 'model_unavailable' ? 'No model could answer, so the lead could not plan this task.' : 'The lead could not make a usable plan for this task.');
 
       const outputs = [];
@@ -123,12 +144,12 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
         for (let attempt = 0; ; attempt += 1) {
           if (current !== 'in_progress') await setStatus('in_progress', { assigned_agent_id: worker.id, ...(outputs.length === 0 && attempt === 0 ? { started_at: new Date().toISOString() } : {}) }, { worker: worker.name });
 
-          const result = await worker.run({ taskId: `${taskId}-${index}-${attempt}`, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}) });
+          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}) }));
           if (result.status === 'needs_founder') return await block('This needs the founder to decide first, so the task is waiting.', { status: 'needs_founder', request: result.request });
           if (result.status !== 'done') return await block(WORKER_STOPPED[result.reason] ?? 'The worker could not finish.');
 
           await setStatus('in_review', {}, { worker: worker.name });
-          const review = await lead.review({ taskId, subtask, output: result.output });
+          const review = await busy(lead, () => lead.review({ taskId, subtask, output: result.output }));
           if (review.accept === true) {
             outputs.push({ worker: worker.name, title: subtask.title, output: result.output, revisions: attempt });
             break;

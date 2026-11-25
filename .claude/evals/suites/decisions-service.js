@@ -585,7 +585,7 @@ const checks = [
   {
     // The daily brief (step 2.6) reads decisions only through this method, so this service stays the one place that knows how a status and a
     // resolution are stored. It is read only and gives kinds and amounts, never a card's words.
-    id: 'summary-gives-what-waits-and-what-was-decided-since-a-moment-as-kinds-and-amounts-and-never-a-cards-words',
+    id: 'summary-gives-what-waits-and-what-was-decided-since-a-moment-as-kinds-amounts-and-the-one-question-and-nothing-else-of-a-card',
     async check() {
       const c = await setup();
       const before = new Date(Date.now() - 60_000).toISOString();
@@ -602,10 +602,12 @@ const checks = [
       await c.service.summary({ since: before });
       c.state.blocked = 'The runtime cannot write its audit log.';
       const err = await thrown(() => c.service.summary({ since: before }));
-      return verdict(out.waiting.length === 1 && out.waiting[0].category === 'legal_or_public' && out.waiting[0].amountInr === null && Object.keys(out.waiting[0]).sort().join() === 'amountInr,amountUsd,category'
+      return verdict(out.waiting.length === 1 && out.waiting[0].category === 'legal_or_public' && out.waiting[0].amountInr === null && Object.keys(out.waiting[0]).sort().join() === 'amountInr,amountUsd,category,createdAt,question'
+        && out.waiting[0].question === GOOD_CARD.decide && !Number.isNaN(Date.parse(out.waiting[0].createdAt))
+        && !text.includes(GOOD_CARD.why_now) && !text.includes(GOOD_CARD.if_yes) && !text.includes(GOOD_CARD.if_no) && !text.includes(GOOD_CARD.recommendation)
         && out.decided.map((d) => `${d.category}:${d.status}`).sort().join() === 'spend:approved,spend:rejected' && Object.keys(out.decided[0]).sort().join() === 'category,status'
         && future.decided.length === 0 && future.waiting.length === 1 && odd.every((r) => r.decided.length === 0 && r.waiting.length === 1)
-        && !text.includes(GOOD_CARD.decide) && !text.includes('razorpay') && !/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text)
+        && !text.includes('razorpay') && !/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text)
         && c.log.length === 0 && err !== null, `${text} | writes ${c.log.length} | err ${err?.message}`);
     },
   },

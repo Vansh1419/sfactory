@@ -125,6 +125,47 @@ const cases = [
     },
   },
   {
+    // Telegram's /status (Nov 26, 2026): the same overview as one plain message, so the phone and the Teams page cannot disagree.
+    id: 'status-text-lists-every-team-on-one-line-and-shows-one-team-in-detail-for-the-words-the-founder-uses',
+    async check() {
+      const { renderStatusText } = loadSubject(SUBJECT);
+      const team = (over = {}) => ({ team: 'support', label: 'Customer Support', agents: [{ id: 'a', name: 'Aria', role: 'worker', status: 'working' }, { id: 'b', name: 'Sana', role: 'team_lead', status: 'idle' }], counts: { queued: 1, in_progress: 1, in_review: 0, blocked: 1, done: 3 }, doneCapped: false, open: [{ id: 'o1', title: 'Reply to Ann', status: 'in_progress', assignedTo: 'Aria' }, { id: 'o2', title: 'Reply to Zed', status: 'queued', assignedTo: null }], blocked: [{ id: 'b1', title: 'Handle the refund', reason: 'This needs the founder to decide first, so the task is waiting.' }], recentlyDone: [], ...over });
+      const overview = { at: 'x', teams: [team(), team({ team: 'marketing_sales', label: 'Marketing and Sales', counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 0, done: 200 }, doneCapped: true, open: [], blocked: [] }), team({ team: 'finance_legal_ops', label: 'Finance, Legal and Ops', agents: [], counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 0, done: 0 }, open: [], blocked: [] })] };
+      const all = renderStatusText(overview, '');
+      const detail = renderStatusText(overview, 'support');
+      const sales = ['sales', 'Sales', 'marketing', 'SALES  '].map((q) => renderStatusText(overview, q));
+      const none = renderStatusText(overview, 'finance');
+      const unknown = [renderStatusText(overview, 'pizza'), renderStatusText(overview, 'orchestrator')];
+      return verdict(/^Teams right now:/.test(all) && all.includes('- Customer Support: Needs attention (1 waiting, 1 working, 1 blocked, 3 done)') && all.includes('- Marketing and Sales: All caught up (0 waiting, 0 working, 0 blocked, 200+ done)') && all.includes('- Finance, Legal and Ops: Not started (0 waiting, 0 working, 0 blocked, 0 done)') && /\/status sales/.test(all)
+        && /^Customer Support: Needs attention\n1 waiting, 1 working, 1 blocked, 3 done\.\n2 agents: Aria \(working\), Sana \(idle\)\./.test(detail) && detail.includes('Blocked:\n- Handle the refund: This needs the founder to decide first') && detail.includes('- Reply to Ann: being worked on by Aria') && detail.includes('- Reply to Zed: waiting to start')
+        && sales.every((s) => s.startsWith('Marketing and Sales: All caught up')) && none.startsWith('Finance, Legal and Ops: Not started') && none.includes('No agents yet.') && !none.includes('Blocked:') && !none.includes('Open:')
+        && unknown[0].startsWith('I do not know that team.') && /^No work|^Orchestrator|do not know/.test(unknown[1]), json({ all, detail, unknown }));
+    },
+  },
+  {
+    id: 'status-text-is-cut-limits-its-lists-never-throws-and-uses-the-same-status-words-as-the-teams-page',
+    async check() {
+      const { renderStatusText } = loadSubject(SUBJECT);
+      const page = loadSubject('src/renderer/teams.mjs');
+      const many = Array.from({ length: 40 }, (_, i) => ({ id: `t${i}`, title: `Task number ${i} ${'x'.repeat(150)}`, status: 'queued', assignedTo: null, reason: 'Reason '.repeat(50) }));
+      const big = renderStatusText({ teams: [{ team: 'support', label: 'Customer Support', agents: [], counts: { queued: 40, in_progress: 0, in_review: 0, blocked: 40, done: 0 }, doneCapped: false, open: many, blocked: many }] }, 'support');
+      const odd = [undefined, null, 5, 'x', [], {}, { teams: 'x' }].map((v) => renderStatusText(v, 'support'));
+      const oddQueries = [undefined, null, 5, {}, ['support']].map((q) => renderStatusText({ teams: [] }, q));
+      // The same situations as the window's page, one by one: the two must use the same words.
+      const situations = [
+        { counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 2, done: 5 }, agents: 1 }, { counts: { queued: 3, in_progress: 1, in_review: 0, blocked: 0, done: 0 }, agents: 1 }, { counts: { queued: 0, in_progress: 0, in_review: 1, blocked: 0, done: 0 }, agents: 1 },
+        { counts: { queued: 2, in_progress: 0, in_review: 0, blocked: 0, done: 9 }, agents: 1 }, { counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 0, done: 4 }, agents: 0 }, { counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 0, done: 0 }, agents: 2 }, { counts: { queued: 0, in_progress: 0, in_review: 0, blocked: 0, done: 0 }, agents: 0 },
+      ];
+      const mismatches = [];
+      for (const s of situations) {
+        const team = { team: 'support', label: 'Customer Support', agents: Array.from({ length: s.agents }, (_, i) => ({ id: `a${i}`, name: `A${i}`, role: 'worker', status: 'idle' })), counts: s.counts, doneCapped: false, open: [], blocked: [], recentlyDone: [] };
+        const label = page.teamView(team).status.label;
+        if (!renderStatusText({ teams: [team] }, 'support').startsWith(`Customer Support: ${label}\n`)) mismatches.push(`${JSON.stringify(s.counts)} agents ${s.agents} -> ${label}`);
+      }
+      return verdict(big.length <= 3500 && big.endsWith('…') === (big.length === 3500) && (big.match(/^- /gm) ?? []).length <= 10 && big.includes('...and 35 more.') && odd.every((x) => x === 'The team status is not available right now.') && oddQueries.every((x) => typeof x === 'string') && mismatches.length === 0, json({ len: big.length, odd, mismatches }));
+    },
+  },
+  {
     id: 'a-failing-store-throws-and-never-returns-a-half-answer',
     async check() {
       const fails = (when) => ({ select: async (table) => { if (table === when) throw new Error(`database said ${SECRET} postgres://u:p@h/db`); return []; } });

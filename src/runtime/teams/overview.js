@@ -77,4 +77,65 @@ function createTeamsOverview({ store, now = () => new Date() } = {}) {
   return { list };
 }
 
-module.exports = { createTeamsOverview, TEAMS };
+// ---- the same overview as one plain message, for Telegram's /status ------------------------------------------------------------------
+
+const MAX_STATUS_CHARS = 3_500;
+const MAX_STATUS_TASKS = 5;
+// What the founder may type after /status. The words are the ones used in the company's own language.
+const TEAM_WORDS = Object.freeze({
+  orchestrator: ['orchestrator'],
+  product_engineering: ['product', 'engineering', 'eng', 'product_engineering'],
+  marketing_sales: ['sales', 'marketing', 'marketing_sales'],
+  support: ['support', 'customer'],
+  finance_legal_ops: ['finance', 'legal', 'ops', 'finance_legal_ops'],
+});
+const TASK_WORDS = Object.freeze({ queued: 'waiting to start', in_progress: 'being worked on', in_review: 'being checked by the lead' });
+const sentence = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/** Where one team stands, in the same words as the window's Teams page (an eval keeps the two the same). */
+function statusLabel(team) {
+  const c = team.counts;
+  if (c.blocked > 0) return 'Needs attention';
+  if (c.in_progress + c.in_review > 0) return 'Working';
+  if (c.queued > 0) return 'Waiting to start';
+  if (c.done > 0) return 'All caught up';
+  return team.agents.length > 0 ? 'No work yet' : 'Not started';
+}
+
+const countsLine = (c, capped) => `${c.queued} waiting, ${c.in_progress + c.in_review} working, ${c.blocked} blocked, ${c.done}${capped ? '+' : ''} done`;
+
+/** The team the founder meant, from a word like "sales" or "customer support"; null when it is not one of the five. */
+function findTeam(overview, query) {
+  const wanted = String(query ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (wanted === '') return null;
+  const key = Object.keys(TEAM_WORDS).find((k) => TEAM_WORDS[k].includes(wanted.replace(/ /g, '_')) || TEAM_WORDS[k].some((w) => wanted.split(' ').includes(w)));
+  return overview.teams.find((t) => t.team === key) ?? overview.teams.find((t) => t.label.toLowerCase() === wanted) ?? null;
+}
+
+/** /status as plain text: every team on one line, or one team in detail. Built only from the overview, so it matches the Teams page. */
+function renderStatusText(overview, query) {
+  if (overview === null || typeof overview !== 'object' || !Array.isArray(overview.teams)) return 'The team status is not available right now.';
+  const wanted = String(query ?? '').trim();
+  let text;
+  if (wanted === '') {
+    text = ['Teams right now:', ...overview.teams.map((t) => `- ${t.label}: ${statusLabel(t)} (${countsLine(t.counts, t.doneCapped)})`), '', 'Send /status sales, /status support and so on for the detail.'].join('\n');
+  } else {
+    const t = findTeam(overview, wanted);
+    if (!t) return 'I do not know that team. Try /status sales, /status support, /status product, /status finance or /status orchestrator.';
+    const lines = [`${t.label}: ${statusLabel(t)}`, countsLine(t.counts, t.doneCapped) + '.', t.agents.length === 0 ? 'No agents yet.' : `${sentence(t.agents.length, 'agent', 'agents')}: ${t.agents.map((a) => `${a.name} (${a.status})`).join(', ')}.`];
+    if (t.blocked.length > 0) {
+      lines.push('', 'Blocked:');
+      for (const b of t.blocked.slice(0, MAX_STATUS_TASKS)) lines.push(`- ${b.title}: ${b.reason}`);
+      if (t.blocked.length > MAX_STATUS_TASKS) lines.push(`...and ${t.blocked.length - MAX_STATUS_TASKS} more.`);
+    }
+    if (t.open.length > 0) {
+      lines.push('', 'Open:');
+      for (const o of t.open.slice(0, MAX_STATUS_TASKS)) lines.push(`- ${o.title}: ${TASK_WORDS[o.status] ?? o.status}${o.assignedTo ? ` by ${o.assignedTo}` : ''}`);
+      if (t.open.length > MAX_STATUS_TASKS) lines.push(`...and ${t.open.length - MAX_STATUS_TASKS} more.`);
+    }
+    text = lines.join('\n');
+  }
+  return text.length > MAX_STATUS_CHARS ? `${text.slice(0, MAX_STATUS_CHARS - 1)}…` : text;
+}
+
+module.exports = { createTeamsOverview, renderStatusText, TEAMS };

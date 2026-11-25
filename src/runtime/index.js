@@ -50,7 +50,7 @@ const AGENT_LIMITS = Object.freeze({ maxSteps: 10, maxTokens: 60_000 });
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, additionalTools = [], mailSend }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, additionalTools = [], mailSend, providers }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -80,7 +80,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // written to the audit log before it is made, and if that write fails no model is called. Like the
   // decisions service it is for trusted code (the orchestrator, step 1.7); agents never get it directly.
   const router = createRouter({
-    providers: buildProviders({ env, fetchImpl }),
+    // `providers` is for tests (the gate scripts): a ready-made provider list instead of the real ones. The app never passes it.
+    providers: Array.isArray(providers) ? providers : buildProviders({ env, fetchImpl }),
     audit: ({ action, ...detail }) => audit.append({ actorType: 'system', action, detail }),
     sleep,
     // Per task, not overall. A team worker re-sends its skills (about 5,400 tokens) with every step, so a run of a few steps needs
@@ -170,7 +171,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // the founder's goals from it.
   // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
   const brief = createBrief({ store, decisions });
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: createTeamsOverview({ store }), brief });
+  const teamsOverview = createTeamsOverview({ store });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -186,6 +188,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     fetchImpl,
     sleep,
     brief,
+    teams: teamsOverview,
+    sales,
+    support,
     audit,
     onError: () => runtime.emit('telegram.error', {}),
   });

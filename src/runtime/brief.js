@@ -18,6 +18,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const READ_LIMIT = 200;
 const MAX_NAMES = 3;
 const MAX_NAME_CHARS = 60;
+const MAX_WAITING_LISTED = 5;
 const MAX_MESSAGE_CHARS = 3_500; // Telegram allows 4,096; this leaves room
 
 const SPEND = 'spend';
@@ -36,6 +37,16 @@ const asList = (rows) => (Array.isArray(rows) ? rows : []);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const capped = (n) => (n >= READ_LIMIT ? `${READ_LIMIT}+` : String(n));
 const isAfter = (iso, since) => typeof iso === 'string' && Date.parse(iso) >= since;
+/** "5 minutes", "3 hours", "2 days": how long ago something was filed. Empty when the time is not a time. */
+function waited(iso, nowMs) {
+  const then = typeof iso === 'string' ? Date.parse(iso) : Number.NaN;
+  if (Number.isNaN(then)) return '';
+  const minutes = Math.max(0, Math.floor((nowMs - then) / 60_000));
+  if (minutes < 1) return 'just filed';
+  if (minutes < 60) return plural(minutes, 'minute', 'minutes');
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? plural(hours, 'hour', 'hours') : plural(Math.floor(hours / 24), 'day', 'days');
+}
 const amount = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
 /** "Wednesday, 26 November 2026" and "9:00 AM IST" for a moment, in Indian time. */
@@ -73,6 +84,14 @@ function createBrief({ store, decisions, now = () => new Date() } = {}) {
     else {
       const byCategory = CATEGORY_ORDER.map((c) => [c, pending.filter((d) => (CATEGORY_WORDS[d.category] ? d.category : 'unknown') === c).length]).filter(([, n]) => n > 0);
       waiting.push(`${plural(pending.length, 'decision is', 'decisions are')} waiting for your answer: ${byCategory.map(([c, n]) => `${n} about ${CATEGORY_WORDS[c]}`).join(', ')}.`);
+      // The cards one by one, oldest first, so nothing waiting is hidden behind a number.
+      const listed = pending.filter((d) => typeof d.question === 'string' && d.question !== '').slice(0, MAX_WAITING_LISTED);
+      for (const d of listed) {
+        const kind = CATEGORY_WORDS[d.category] ?? CATEGORY_WORDS.unknown;
+        const age = waited(d.createdAt, moment.getTime());
+        waiting.push(`${plain(d.question, 160)} (${kind}${age ? `, waiting ${age}` : ''})`);
+      }
+      if (listed.length > 0 && pending.length > listed.length) waiting.push(`...and ${pending.length - listed.length} more in the approval queue.`);
     }
     waiting.push(blocked.length === 0 ? 'No tasks are blocked.' : `${plural(blocked.length, 'task is', 'tasks are')} blocked and need someone to step in (see the Teams page).`);
 

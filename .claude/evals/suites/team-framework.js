@@ -439,6 +439,38 @@ const cases = [
     },
   },
   {
+    // The Teams page (step 2.5) showed every agent as idle, because nothing set a status. An agent is `working` while it plans, works or reviews,
+    // and `idle` again after, whatever happens; a paused agent is never overwritten. It is a display hint: it never stops a task.
+    id: 'an-agent-shows-as-working-while-it-works-and-idle-after-and-a-paused-agent-is-left-alone',
+    async check() {
+      const statusOf = async (h) => Object.fromEntries((await h.env.store.select('agents', { where: { team: 'support' } })).map((r) => [r.name, r.status]));
+      const h = await makeTeam();
+      const seen = [];
+      const original = h.router.complete.bind(h.router);
+      h.router.complete = async (req) => {
+        const s = await statusOf(h);
+        seen.push([req.prompt.includes(PLAN_MARKER) ? 'plan' : req.prompt.includes(REVIEW_MARKER) ? 'review' : 'worker', s.Lee, s.Sam]);
+        return original(req);
+      };
+      const r = await h.team.runTask(task('shows-working'));
+      const after = await statusOf(h);
+
+      const rejected = await makeTeam({ review: [JSON.stringify({ accept: false, feedback: 'No.' })] });
+      const blocked = await rejected.team.runTask(task('shows-idle-when-blocked'));
+      const afterBlocked = await statusOf(rejected);
+
+      const paused = await makeTeam();
+      await paused.env.store.update('agents', { id: paused.workers.Sam.id }, { status: 'paused' });
+      const pausedRun = await paused.team.runTask(task('paused'));
+      const afterPaused = await statusOf(paused);
+      await paused.env.store.update('agents', { id: paused.workers.Sam.id }, { status: 'idle' });
+
+      const line = (x) => x.join(':');
+      return verdict(r.status === 'done' && seen.map(line).join() === 'plan:working:idle,worker:idle:working,review:working:idle' && after.Lee === 'idle' && after.Sam === 'idle'
+        && blocked.status === 'blocked' && afterBlocked.Lee === 'idle' && afterBlocked.Sam === 'idle' && pausedRun.status === 'done' && afterPaused.Sam === 'paused', json({ seen: seen.map(line), after, afterBlocked, afterPaused }));
+    },
+  },
+  {
     id: 'the-app-is-told-when-a-task-or-an-agent-changes-and-a-failing-listener-never-stops-the-task',
     // The window's Teams page refreshes on this (step 2.5). It is a hint: it fires when the agents are registered, when a task is created and
     // on every status change, it is optional, and if the listener throws the task goes on exactly as before.
@@ -452,7 +484,7 @@ const cases = [
       const boom = await makeTeam({}, { onChange: () => { throw new Error('the window is gone'); } });
       const rBoom = await boom.team.runTask(task('listener-throws'));
       const trail = statusTrail(await auditFor(h.env, r.taskId));
-      return verdict(afterRegister >= 1 && r.status === 'done' && told - afterRegister === 1 + 3 && trail === 'in_progress,in_review,done' && rPlain.status === 'done' && rBoom.status === 'done' && (await taskRow(boom.env, rBoom.taskId)).status === 'done', json({ afterRegister, told, status: [r.status, rPlain.status, rBoom.status], trail }));
+      return verdict(afterRegister >= 1 && r.status === 'done' && told - afterRegister === 1 + 3 + 6 && /* the task, its three status changes, and six agent status changes (plan, work and review, each working then idle) */ trail === 'in_progress,in_review,done' && rPlain.status === 'done' && rBoom.status === 'done' && (await taskRow(boom.env, rBoom.taskId)).status === 'done', json({ afterRegister, told, status: [r.status, rPlain.status, rBoom.status], trail }));
     },
   },
 ];

@@ -16,6 +16,7 @@ const { createTelegramApi } = require('./api');
 const { createBot } = require('./bot');
 const { createPoller } = require('./poller');
 const { renderBriefText } = require('../brief');
+const { renderStatusText } = require('../teams/overview');
 const { parseDigestTime, startDigestJob } = require('./digest');
 
 const MAX_PUSH_RETRIES = 3;
@@ -44,7 +45,7 @@ function telegramProblem(env) {
 }
 
 /** Returns null when Telegram is not set up. `start()` begins work; `stop()` ends it. */
-function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, brief, audit, onError = () => {} }) {
+function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, brief, teams, sales, support, audit, onError = () => {} }) {
   if (telegramProblem(env) !== null) return null;
   const token = clean(env.TELEGRAM_BOT_TOKEN);
   const chatId = clean(env.TELEGRAM_FOUNDER_CHAT_ID);
@@ -53,7 +54,9 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
   const api = createTelegramApi({ token, fetchImpl });
   // /brief and the morning digest send the same text the window shows: it is built from the brief's own lines.
   const briefText = brief ? async () => renderBriefText(await brief.get()) : undefined;
-  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, briefText, onError });
+  // /status shows the same overview as the window's Teams page.
+  const statusText = teams ? async (query) => renderStatusText(await teams.list(), query) : undefined;
+  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, onError });
   const digestSetting = parseDigestTime(env.DIGEST_TIME_IST);
   // A day's send is written to the audit log, so a restart the same day does not send it again.
   const ledger = store && audit ? {

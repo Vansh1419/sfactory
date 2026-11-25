@@ -35,7 +35,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
-| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 76 | 100% | 1.8 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 81 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 33 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
@@ -52,9 +52,10 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `tool-gate` | the step 1.10 "done when", end to end with the real policy, loader, filesystem and GitHub tools and graph | 9 | 100% | 1.10 (gate) | pass |
 | `shared-skills` | `.claude/skills/shared/{plain-language-approval,escalation-rules,handoff-notes}/SKILL.md` | 9 | 100% | 1.10 (skills) | pass |
 | `phase1-gate` | `scripts/gate1.js` (Gate 1, also run by hand with `npm run gate:1`) | 3 | 100% | 1.11 | pass |
+| `phase2-gate` | `scripts/gate2.js` (Gate 2, also run by hand with `npm run gate:2`) | 3 | 100% | 2.7 | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
 | `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
-| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 22 | 100% | 2.1 | pass |
+| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 23 | 100% | 2.1 | pass |
 | `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
 | `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 21 | 100% | 2.2 | pass |
 | `search-tool` | `src/runtime/tools/search.js` (web search through Tavily) | 8 | 100% | 2.3 (search) | pass |
@@ -63,9 +64,9 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
 | `ticket-tools` | `src/runtime/tools/tickets.js` (read a ticket a team has taken, record that it was answered), on a real Postgres | 9 | 100% | 2.4 (tickets) | pass |
 | `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 12 | 100% | 2.4 | pass |
-| `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 6 | 100% | 2.5 | pass |
+| `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 8 | 100% | 2.5 | pass |
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 11 | 100% | 2.5 | pass |
-| `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 9 | 100% | 2.6 | pass |
+| `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
 | `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 35 | 100% | 1.2 | pass |
@@ -204,7 +205,9 @@ Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; 
 
 Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
 
-**Cases:** 76
+**Cases:** 81
+
+Added Nov 26, 2026: **/status** sends the overview text for the words after the command (and says it is not available without one, never shows error text, and ignores a stranger); **/lead <company> [https://site] [email]** picks the web address and email out of the words, answers at once, runs the sales team in the background and reports how it ended while the bot keeps answering, says what is missing, allows two team jobs at a time, relays why a lead was refused and never shows error text; **/ticket [id]** works the oldest open ticket or the one named and says how it ended. Checked by mutation: removing the limit on team jobs was caught.
 
 Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
 
@@ -428,7 +431,9 @@ Covers: one JSON action per model call (a tool, or finish); the first prompt hol
 
 Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/agents/lead.js`, `team.js` and `index.js` (the factory). Real Postgres with the real migrations: the `tasks`, `agents` and `audit_log` rows are real. The model is scripted; the policy, tool config, skills and tool loader are real.
 
-**Cases:** 22
+**Cases:** 23
+
+Added Nov 26, 2026: **an agent shows as working while it plans, works or reviews and idle again after, whatever happens** (including when the task ends blocked), and a paused agent is never overwritten. It is a display hint that can never stop a task. Checked by mutation: never marking an agent working was caught.
 
 The step 2.1 "done when" is the first two cases: a team of one lead and one worker completes a task (queued, in_progress, in_review, done, with the lead's review before done), and **the lead rejects a bad worker output once, the worker tries again with the feedback in its prompt, and the task is done**. Also: rejected twice blocks the task with a reason and it is never done; a review that is not a plain `accept: true` (yes, "true", 1, `{}`, garbage, no answer) counts as a rejection; zero allowed revisions blocks at the first rejection; a plan naming an unknown worker, empty, too long or garbled runs no worker and blocks the task; a two-subtask plan runs in order and stops at the first block; a worker that needs the founder blocks the task and hands the request back, a worker that stops or fails blocks it with a plain reason; every status change is audited before it is made and an audit failure leaves the status where it was; the audit log has the task from creation to done in order; agents are registered once with the right role and tier; a task with no or an odd title is refused with no row and no model call; a secret in a task is never stored or logged. The factory: builds a team from `shared` plus its own tools and skills and no other team's, refuses to build without the company charter, refuses unknown teams and odd names, reports config problems, never gives a team a tool with no policy rule, and passes its limits to every agent.
 
@@ -648,7 +653,9 @@ Covers: **a routine ticket is answered with a reply that went through the gate (
 
 Suite: `.claude/evals/suites/teams-overview.js`. Code under test: `src/runtime/teams/overview.js`, on a real Postgres with the migrations (the `agents` and `tasks` tables). Each case uses its own team so the counts are exact.
 
-**Cases:** 6
+**Cases:** 8
+
+Added Nov 26, 2026: **the same overview as one plain message for Telegram's /status** (`renderStatusText`): every team on one line, or one team in detail for the words the founder uses (sales, support, product, finance, orchestrator), with its agents, blocked tasks with the reason and open tasks (at most five of each); an unknown team says what to try; the text is cut, never throws, and **uses the same status words as the window's Teams page in every situation** (checked against `teams.mjs`). Checked by mutation: putting "working" above "blocked" was caught.
 
 Covers: every team is listed in a fixed order with a plain label even when it has nothing; the page matches the data (counts per state, open tasks with the agent they are assigned to, blocked tasks with their reason, the latest finished ones, cancelled tasks never shown); **a task that changes status moves in the next listing and a removed agent disappears**; only plain short fields come back (never a description or a pod id) and text is cut and stripped of control characters; done work is counted up to a limit with the latest five listed newest first; a failing store throws. Checked by mutation on Nov 25, 2026: showing every task under every team was caught.
 
@@ -664,7 +671,9 @@ Covers: a team's status says what needs a person first (blocked), then what is b
 
 Suite: `.claude/evals/suites/daily-brief.js`. Code under test: `src/runtime/brief.js` (over an in-memory store and the REAL decisions service, plus one case on the real tables of a Postgres) and the rules for `src/renderer/BriefPanel.jsx` (read as text).
 
-**Cases:** 9
+**Cases:** 10
+
+Added Nov 26, 2026: **the cards waiting for the founder are listed one by one**, oldest first, each with its question, its kind and how long it has waited, up to five, then "...and N more in the approval queue"; a card with no question is counted but not listed, the text is cut and stripped of control characters, and no other part of a card is shown. Checked by mutation: removing the limit of five was caught.
 
 Covers: the six sections in order (Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests); **revenue and deployments say plainly "Not tracked yet" and show no number**, because no payments and no deployment tool are connected; the date and time in the headline are in IST (including just after midnight); waiting decisions are counted by kind and blocked tasks are added, and the headline adds them up; leads are counted with the new ones of the last 24 hours exactly and the latest names are shown as text (cut and stripped of control characters); tickets show open, in progress, and what was answered or sent to the founder in the last 24 hours; spend requests show what waits with the amount in rupees and dollars (or only the one that is known, or none) and what was decided in the last 24 hours; the Telegram text is built only from the same lines, has no markup and stays under 3,500 characters; it runs on the real tables and a failing store throws; and the window's panel draws only those lines as text, has no timer, and refreshes on announcements, on focus and from a button. Decisions are read only through `decisions.summary`, never from their table.
 
@@ -675,6 +684,14 @@ Suite: `.claude/evals/suites/morning-digest.js`. Code under test: `src/runtime/t
 **Cases:** 11
 
 Covers: the setting defaults to 09:00, can be turned off with `off`, and a bad value says so without repeating it; the date and time are worked out in IST whatever the computer's zone; **the digest goes out once a day at the set time and not before**; **the text sent is the brief's own text, built from the lines the window shows**; an app started after the set time sends at once but only within six hours of it; a restart the same day does not send it again (the day's send is in the audit log) and a custom time is respected; the attempt is recorded before anything is sent and if it cannot be recorded nothing is sent; a failed send is tried again after five minutes, at most six times a day, and succeeds or gives up; a brief that cannot be made or a ledger that cannot be read sends nothing and is tried again; overlapping checks send once and `stop` ends the job; and a job without what it needs does nothing and never throws. Checked by mutation on Nov 25, 2026: sending before recording, and skipping the "already sent today" lookup, were each caught.
+
+### phase2-gate
+
+Suite: `.claude/evals/suites/phase2-gate.js`. The scenario is `scripts/gate2.js` (re-run it by hand with `npm run gate:2`); this suite runs it and fails with the names of the steps that failed. Real: the whole app (`createApp`), a real Postgres with the migrations, the Marketing and Sales team and the Customer Support team (their skills, tool files, workers and review), the outbound gate, policy, decisions service, tool loader, Telegram bot and poller, Teams overview, daily brief and audit log. Fake: Telegram's and Tavily's servers, the model (a scripted provider cleared for client text, passed to `createApp` through its `providers` test seam) and the mail transport. Any other network request is refused and counted.
+
+**Cases:** 3
+
+Covers, in 22 steps per run: the app starts and the Teams page and brief start empty; **a lead is researched with a web search, saved in the lead list, written up as a proposal email that is reviewed and waits on a card, and nothing is sent**; the card is in plain language, has the email under "Show details", and reaches the phone with Approve and Reject buttons and the window's queue; **a routine ticket is answered through the same gate and recorded; a refund ticket becomes a card in the spend category, the ticket is marked escalated, and the customer is written nothing**; the phone's `/brief` is the same brief the window shows and says what happened; the Teams page matches the data; **one tap approves (the email is sent exactly once with exactly the stored text, and a second send does nothing) or rejects (it can never be sent)**; the refund card is still waiting and no refund ran; audit_log has every step in order and every tool by agent and team; no key appears anywhere; the window was told as it happened; only the fake servers were reached. It is run with the founder approving and again rejecting, and once more from scratch to show it repeats. Checked by mutation on Nov 25, 2026: filing the refund card without marking the ticket escalated, and sending only the headline on the phone's `/brief`, were each caught.
 
 ## Planned evals (not built yet)
 

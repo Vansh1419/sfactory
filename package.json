@@ -12,6 +12,7 @@
     "check:keys": "node scripts/check-keys.js",
     "check:db": "node scripts/check-db.js",
     "gate:1": "node scripts/gate1.js",
+    "gate:2": "node scripts/gate2.js",
     "lead": "node scripts/lead.js",
     "ticket": "node scripts/ticket.js",
     "db:migrate": "node scripts/db-migrate.js",

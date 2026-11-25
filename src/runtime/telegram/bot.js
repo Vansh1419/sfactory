@@ -35,8 +35,9 @@ const ACCESS_BY_CODE = { r: 'read', w: 'write' };
 
 const BRIEF_UNAVAILABLE = 'The brief is not available right now.';
 
+const STATUS_UNAVAILABLE = 'The team status is not available right now.';
+
 const NOT_YET = {
-  status: 'Team status is not available yet. It arrives once the teams are running.',
   pause: 'Pausing an agent is not available yet. It arrives with the agent controls.',
 };
 
@@ -47,8 +48,10 @@ const HELP = [
   '/addtool <tool> routine <read|write> - let it run without asking (needs your Yes)',
   '/removetool <tool> - remove a tool you added',
   '/goal <what you want done> - give the team a goal',
+  '/lead <company> [https://their-site] [their-email] - give the sales team a lead to research',
+  '/ticket [ticket id] - give the support team the oldest open ticket (or the one you name)',
   '/brief - today\'s brief (leads, tickets, spend requests and what is waiting for you)',
-  '/status <team> - team status (not available yet)',
+  '/status [team] - how the teams are doing (try /status sales or /status support)',
   '/pause <agent> - pause an agent (not available yet)',
   '/help - this list',
 ].join('\n');
@@ -62,6 +65,21 @@ const MAX_GOAL_CHARS = 2000;
 const MAX_GOALS_AT_ONCE = 3;
 const MAX_LOG_LINE_CHARS = 300;
 const GOAL_USAGE = 'Usage: /goal <what you want done>\nFor example: /goal Buy a domain for the new landing page';
+
+// /lead and /ticket (step 2.x follow-up): they start the sales team or the support team, which take a few minutes, so they run in the background like
+// a goal and the result arrives as a second message. Any email the team writes arrives as its own card. Two at a time at most.
+const MAX_TEAM_RUNS_AT_ONCE = 2;
+const LEAD_USAGE = 'Usage: /lead <company> [https://their-site] [their-email]\nFor example: /lead Acme Online Shoes https://acme-shoes.example hello@acme-shoes.example';
+const TICKET_USAGE = 'Usage: /ticket (the oldest open ticket) or /ticket <ticket id>';
+const EMAIL_WORD = /^[^\s@,;<>()[\]\\]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$/;
+const TEAM_REASONS = Object.freeze({
+  team_unavailable: 'The team is not available right now.',
+  not_available: 'That ticket is not open any more (it may already be taken, answered or closed).',
+  bad_ticket: 'That is not a ticket id.',
+  card_failed: 'A card for you could not be written, so the ticket was put back to open.',
+  not_answered: 'The team finished without answering it, so the ticket was put back to open.',
+  store_failed: 'The ticket list could not be read.',
+});
 
 /** The founder-facing summary of a run: fixed sentences plus the plan's own plain-text log lines. */
 function describeRun(result) {
@@ -163,7 +181,7 @@ function describeRule(rule) {
   return rule.status === 'proposed' ? `${base} - waiting for your Yes` : base;
 }
 
-function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, onError = () => {} }) {
+function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, onError = () => {} }) {
   const founder = Number(founderChatId);
   const reply = (text, buttons) => api.sendMessage({ chatId: founder, text, buttons });
   const toast = (callbackId, text) => api.answerCallback({ id: callbackId, text: clip(text, MAX_TOAST_CHARS) });
@@ -205,6 +223,83 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
     return reply(ADDTOOL_USAGE);
   }
 
+  // ---- team work: /lead and /ticket -----------------------------------------------------
+
+  let teamRuns = 0;
+
+  /** The words after /lead: a web address and an email address are picked out, everything else is the company's name. The team checks the rest. */
+  function parseLead(rest) {
+    const lead = {};
+    const name = [];
+    for (const word of String(rest ?? '').split(/\s+/).filter(Boolean)) {
+      if (/^https:\/\//i.test(word) && lead.website === undefined) lead.website = word;
+      else if (EMAIL_WORD.test(word) && lead.email === undefined) lead.email = word;
+      else name.push(word);
+    }
+    lead.company = name.join(' ');
+    return lead;
+  }
+
+  /** What the founder is told when a team run ends. Only sentences written here or by the team itself; never a model's or a database's own text. */
+  function describeTeamRun(kind, result) {
+    switch (result?.status) {
+      case 'done':
+        return kind === 'lead'
+          ? 'The sales team finished. If it wrote a proposal email, it is waiting for you as a card in this chat. If there is no card, it decided not to write one.'
+          : 'The support team answered the ticket. The reply is waiting for you as a card in this chat. Nothing was sent to the customer.';
+      case 'needs_founder':
+        return 'The team needs your decision on something. The card is in this chat. Nothing was sent to anyone.';
+      case 'none':
+        return 'There are no open tickets.';
+      case 'blocked':
+        return clip(`The team could not finish. ${typeof result.reason === 'string' ? result.reason : ''}`.trim(), 400);
+      case 'failed': {
+        if (result.reason === 'bad_lead') return clip(`I could not use that lead. ${(Array.isArray(result.problems) ? result.problems : []).filter((p) => typeof p === 'string').join(' ')}`.trim(), 400);
+        return TEAM_REASONS[result.reason] ?? 'The team could not do that.';
+      }
+      default:
+        return 'The team stopped.';
+    }
+  }
+
+  /** Runs in the background. It never rejects: a failure goes to onError and the founder gets a plain sentence. */
+  async function runTeam(kind, run) {
+    try {
+      await reply(describeTeamRun(kind, await run()));
+    } catch (err) {
+      onError(err);
+      try {
+        await reply(GENERIC_ERROR);
+      } catch (replyErr) {
+        onError(replyErr);
+      }
+    } finally {
+      teamRuns -= 1;
+    }
+  }
+
+  async function startTeamRun(kind, run) {
+    if (teamRuns >= MAX_TEAM_RUNS_AT_ONCE) return reply(`I am already running ${MAX_TEAM_RUNS_AT_ONCE} team jobs. Please wait for one to finish.`);
+    teamRuns += 1;
+    runTeam(kind, run); // not awaited on purpose: a team takes minutes, and taps must not wait behind it
+    return reply(kind === 'lead' ? 'Working on it. I will message you here when the sales team has finished, and any email it writes arrives as a card.' : 'Working on it. I will message you here when the support team has finished, and its reply arrives as a card.');
+  }
+
+  async function startLead(rest) {
+    if (!sales) return reply('The sales team is not available right now.');
+    const lead = parseLead(rest);
+    if (lead.company === '') return reply(LEAD_USAGE);
+    return startTeamRun('lead', () => sales.workLead(lead));
+  }
+
+  async function startTicket(rest) {
+    if (!support) return reply('The support team is not available right now.');
+    const id = String(rest ?? '').trim();
+    if (id === '') return startTeamRun('ticket', () => support.workNext());
+    if (!UUID.test(id)) return reply(TICKET_USAGE);
+    return startTeamRun('ticket', () => support.workTicket({ ticketId: id }));
+  }
+
   // ---- goals ----------------------------------------------------------------------------
 
   let goalsRunning = 0;
@@ -242,10 +337,16 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
         return reply(HELP);
       case 'goal':
         return startGoal(rest);
+      case 'lead':
+        return startLead(rest);
+      case 'ticket':
+        return startTicket(rest);
       case 'brief':
         // The same text the morning digest sends and the window shows (brief.js builds it from the brief's own lines).
         return reply(typeof briefText === 'function' ? await briefText() : BRIEF_UNAVAILABLE);
       case 'status':
+        // The same numbers and words as the window's Teams page (overview.js builds both from the same data).
+        return reply(typeof statusText === 'function' ? await statusText(rest) : STATUS_UNAVAILABLE);
       case 'pause':
         return reply(NOT_YET[cmd]);
       case 'tools': {
