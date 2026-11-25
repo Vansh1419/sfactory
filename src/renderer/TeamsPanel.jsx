@@ -81,7 +81,7 @@ const SWITCHES = [
 ];
 
 /** A kill switch for each team (step 4.2): a team that is switched off stops at its next step and takes no new work. The state comes from the runtime. */
-function TeamSwitches({ setNotice }) {
+export function TeamSwitches({ setNotice }) {
   const [stopped, setStopped] = useState([]);
   const [busy, setBusy] = useState(false);
 

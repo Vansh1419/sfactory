@@ -41,6 +41,14 @@ contextBridge.exposeInMainWorld('api', {
     save: (args) => invoke('files.save', args),
     upload: (args) => invoke('files.upload', args),
   },
+  audit: {
+    search: (args) => invoke('audit.search', args),
+  },
+  settings: {
+    get: () => invoke('settings.get'),
+    setLimits: (args) => invoke('settings.setLimits', args),
+    setScaling: (args) => invoke('settings.setScaling', args),
+  },
   guardrails: {
     status: () => invoke('guardrails.status'),
     stopTeam: (args) => invoke('guardrails.stopTeam', args),

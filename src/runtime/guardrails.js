@@ -6,6 +6,7 @@
 //     .limits()                       -> { maxTasksPerDay, loopRepeats }
 //     .teamStopped(team)              -> boolean
 //     .stopTeam({ team, stopped })    -> { team, stopped, changed }      the founder's kill switch for a whole team; audited first
+//     .setLimits({ maxTasksPerDay?, loopRepeats? }) -> { limits, changed }  the Settings page's change: strict bounds (refused, never clamped), audited first, live
 //     .startRun({ agentId, agentName, team, taskId }) -> { ok: true } | { ok: false, reason: 'daily_cap' | 'audit_failed' }
 //     .status()                       -> { limits, stoppedTeams }
 //
@@ -83,16 +84,7 @@ function createGuardrails({ store, audit, isBlocked = () => null, emit = () => {
     if (!isObject(input) || Object.keys(input).some((k) => !['team', 'stopped'].includes(k)) || !TEAMS.includes(input.team) || typeof input.stopped !== 'boolean') {
       throw fail('invalid', `A team (one of ${TEAMS.join(', ')}) and true or false are needed.`);
     }
-    let raw = {};
-    let exists = false;
-    try {
-      const [row] = await store.select('app_settings', { where: { key: KEY }, limit: 1 });
-      raw = isObject(row?.value) ? row.value : {};
-      exists = Boolean(row);
-    } catch (err) {
-      onError(err);
-      throw fail('not_available', 'Team switches need the settings table. Apply the latest database migration (npm run db:migrate) and try again. Nothing was changed.');
-    }
+    const { raw, exists } = await readStrict();
     const stopped = stoppedOf(raw);
     if (stopped.includes(input.team) === input.stopped) return { team: input.team, stopped: input.stopped, changed: false };
 
@@ -102,17 +94,55 @@ function createGuardrails({ store, audit, isBlocked = () => null, emit = () => {
       throw fail('audit_unavailable', 'Nothing was done, because the action could not be recorded in the audit log.');
     }
     const next = { ...raw, stoppedTeams: input.stopped ? [...stopped, input.team] : stopped.filter((t) => t !== input.team) };
+    await save(raw, exists, next);
+    announce('guardrails.changed', { team: input.team, stopped: input.stopped });
+    announce('tasks.changed');
+    return { team: input.team, stopped: input.stopped, changed: true };
+  }
+
+  /** The row as it is now, read fresh. A table that cannot be read is said plainly: nothing is changed without it. */
+  async function readStrict() {
+    try {
+      const [row] = await store.select('app_settings', { where: { key: KEY }, limit: 1 });
+      return { raw: isObject(row?.value) ? row.value : {}, exists: Boolean(row) };
+    } catch (err) {
+      onError(err);
+      throw fail('not_available', 'Settings need the settings table. Apply the latest database migration (npm run db:migrate) and try again. Nothing was changed.');
+    }
+  }
+
+  async function save(raw, exists, next) {
     try {
       if (exists) await store.update('app_settings', { key: KEY }, { value: next, updated_at: now().toISOString() });
       else await store.insert('app_settings', { key: KEY, value: next });
     } catch (err) {
       onError(err);
-      throw fail('not_available', 'The switch could not be saved. Nothing was changed.');
+      throw fail('not_available', 'The change could not be saved. Nothing was changed.');
     }
     cached = { at: now().getTime(), value: next };
-    announce('guardrails.changed', { team: input.team, stopped: input.stopped });
-    announce('tasks.changed');
-    return { team: input.team, stopped: input.stopped, changed: true };
+  }
+
+  async function setLimits(input) {
+    const reason = isBlocked();
+    if (reason) throw fail('blocked', reason);
+    const keys = Object.keys(isObject(input) ? input : {});
+    if (!isObject(input) || keys.length === 0 || keys.some((k) => !Object.hasOwn(BOUNDS, k))) throw fail('invalid', 'Give the daily task cap, how many repeats make a loop, or both.');
+    for (const key of keys) {
+      const [min, max] = BOUNDS[key];
+      if (!Number.isInteger(input[key]) || input[key] < min || input[key] > max) throw fail('invalid', `${key === 'maxTasksPerDay' ? 'The daily task cap' : 'The number of repeats that make a loop'} must be a whole number from ${min} to ${max}.`);
+    }
+    const { raw, exists } = await readStrict();
+    const from = limitsOf(raw);
+    const to = { ...from, ...input };
+    if (from.maxTasksPerDay === to.maxTasksPerDay && from.loopRepeats === to.loopRepeats) return { limits: from, changed: false };
+    try {
+      await audit.append({ actorType: 'founder', action: 'settings.limits_changed', targetType: 'settings', detail: { from, to } });
+    } catch {
+      throw fail('audit_unavailable', 'Nothing was done, because the action could not be recorded in the audit log.');
+    }
+    await save(raw, exists, { ...raw, maxTasksPerDay: to.maxTasksPerDay, loopRepeats: to.loopRepeats });
+    announce('guardrails.changed', { limits: to });
+    return { limits: to, changed: true };
   }
 
   /** An agent is about to start a run: refused past its daily cap, otherwise written to the audit log first. */
@@ -142,7 +172,7 @@ function createGuardrails({ store, audit, isBlocked = () => null, emit = () => {
     return { ok: true };
   }
 
-  return { limits, teamStopped, stopTeam, startRun, status };
+  return { limits, teamStopped, stopTeam, setLimits, startRun, status };
 }
 
 module.exports = { createGuardrails, GuardrailsError, DEFAULTS, TEAMS };

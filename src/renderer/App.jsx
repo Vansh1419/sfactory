@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import ApprovalQueue from './ApprovalQueue.jsx';
 import AgentsPanel from './AgentsPanel.jsx';
+import AuditPanel from './AuditPanel.jsx';
 import BriefPanel from './BriefPanel.jsx';
 import FilesPanel from './FilesPanel.jsx';
 import GoalsPanel from './GoalsPanel.jsx';
+import SettingsPanel from './SettingsPanel.jsx';
 import TeamsPanel from './TeamsPanel.jsx';
 
 // The renderer is sandboxed: it only sees what src/preload.js exposes on `window`.
@@ -65,6 +67,8 @@ export default function App() {
       <TeamsPanel ready={Boolean(ready)} />
       <AgentsPanel ready={Boolean(ready)} />
       <FilesPanel ready={Boolean(ready)} />
+      <AuditPanel ready={Boolean(ready)} />
+      <SettingsPanel ready={Boolean(ready)} />
     </main>
   );
 }

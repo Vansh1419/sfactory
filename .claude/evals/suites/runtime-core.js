@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.events', 'agents.list', 'agents.message', 'agents.pause', 'agents.reassign', 'brief.get', 'decisions.list', 'decisions.resolve', 'files.beginEdit', 'files.endEdit', 'files.history', 'files.pods', 'files.read', 'files.save', 'files.tree', 'files.upload', 'goals.list', 'guardrails.status', 'guardrails.stopTeam', 'runtime.status', 'teams.list', 'teams.startEngineer', 'teams.startFinance', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.events', 'agents.list', 'agents.message', 'agents.pause', 'agents.reassign', 'audit.search', 'brief.get', 'decisions.list', 'decisions.resolve', 'files.beginEdit', 'files.endEdit', 'files.history', 'files.pods', 'files.read', 'files.save', 'files.tree', 'files.upload', 'goals.list', 'guardrails.status', 'guardrails.stopTeam', 'runtime.status', 'settings.get', 'settings.setLimits', 'settings.setScaling', 'teams.list', 'teams.startEngineer', 'teams.startFinance', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
     },
   },
   {

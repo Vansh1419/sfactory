@@ -10,6 +10,8 @@ const { DecisionError } = require('./decisions');
 const { PodFilesError } = require('./pods/files');
 const { AgentControlError } = require('./agents/control');
 const { GuardrailsError } = require('./guardrails');
+const { SettingsError } = require('./settings');
+const { AuditSearchError } = require('./audit-search');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 'cancelled'];
@@ -36,7 +38,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null, agentControl = null, agentEvents = null, guard = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null, agentControl = null, agentEvents = null, guard = null, auditSearch = null, settings = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -247,6 +249,52 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
   files('files.save', ['podId', 'path', 'content', 'message'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a) ?? note(a),
     (a) => podFiles.save({ podId: a.podId, path: a.path, content: a.content, ...(a.message === undefined ? {} : { message: a.message }) }), sizeOnly);
   files('files.upload', ['podId', 'path', 'content'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a), (a) => podFiles.upload({ podId: a.podId, path: a.path, content: a.content }), sizeOnly);
+
+  // The Audit log page (step 4.3): search the audit log by words, an action's name, who, project and time. Read only; the service checks everything again.
+  runtime.register('audit.search', {
+    validate(args) {
+      const extra = unknownKey(args, ['text', 'action', 'actorType', 'podId', 'since', 'until', 'before', 'limit']);
+      if (extra) return extra;
+      for (const key of ['text', 'action', 'actorType', 'podId', 'since', 'until']) if (args[key] !== undefined && typeof args[key] !== 'string') return `${key} must be text`;
+      if (args.text !== undefined && args.text.length > 200) return 'text must be at most 200 characters';
+      if (args.podId !== undefined && !UUID.test(args.podId)) return 'podId must be a project id';
+      if (args.actorType !== undefined && !['founder', 'agent', 'system'].includes(args.actorType)) return 'actorType must be founder, agent or system';
+      if (args.before !== undefined && !(Number.isInteger(args.before) && args.before >= 1)) return 'before must be the id of an entry';
+      if (args.limit !== undefined && !(Number.isInteger(args.limit) && args.limit >= 1 && args.limit <= 100)) return 'limit must be a whole number from 1 to 100';
+      return null;
+    },
+    handler: async (args) => {
+      if (!auditSearch) throw new CommandError('not_available', 'The audit log search is not available right now.');
+      try {
+        return await auditSearch.search(args);
+      } catch (err) {
+        if (err instanceof AuditSearchError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
+    },
+  });
+
+  // The Settings page (step 4.3): read the limits, the scaling rules, the team switches, the approval period (shown, never changed here) and the added tools;
+  // change the limits and the scaling rules. Each change is audited first by the service and takes effect without a restart.
+  const settingsDo = (name, validate, run) => runtime.register(name, {
+    validate,
+    handler: async (args) => {
+      if (!settings) throw new CommandError('not_available', 'The settings are not available right now.');
+      try {
+        return await run(args);
+      } catch (err) {
+        if (err instanceof SettingsError || err instanceof GuardrailsError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
+    },
+  });
+  settingsDo('settings.get', (args) => unknownKey(args, []), () => settings.get());
+  settingsDo('settings.setLimits', (args) => unknownKey(args, ['maxTasksPerDay', 'loopRepeats']) ?? (Object.keys(args).length === 0 ? 'give the daily task cap, the repeats that make a loop, or both' : null)
+    ?? (Object.values(args).every((v) => Number.isInteger(v)) ? null : 'the values must be whole numbers'), (args) => settings.setLimits(args));
+  settingsDo('settings.setScaling', (args) => unknownKey(args, ['team', 'role', 'max_agents', 'scale_up_queue_threshold', 'scale_up_wait_minutes', 'idle_minutes_before_removal', 'enabled'])
+    ?? (typeof args.team === 'string' && typeof args.role === 'string' ? null : 'team and role must be text')
+    ?? (['max_agents', 'scale_up_queue_threshold', 'scale_up_wait_minutes', 'idle_minutes_before_removal'].every((k) => args[k] === undefined || Number.isInteger(args[k])) ? null : 'the values must be whole numbers')
+    ?? (args.enabled === undefined || typeof args.enabled === 'boolean' ? null : 'enabled must be true or false'), (args) => settings.setScaling(args));
 
   // Guardrails (step 4.2): which teams are switched off and the limits, and the kill switch of one team. The service checks the team again and audits first.
   runtime.register('guardrails.status', {
