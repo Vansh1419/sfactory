@@ -34,6 +34,7 @@ const { createAgentFactory } = require('./agents');
 const { createSalesTeam } = require('./teams/marketing-sales');
 const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
+const { createTeamsOverview } = require('./teams/overview');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -158,7 +159,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The agent factory (step 2.1) builds a team from `shared` plus the team's own tools and skills, and the Marketing and Sales
   // team (step 2.3) runs on it. Without a skills folder no team is built (the company charter is required). The team is built
   // the first time a lead is given to it, not at start.
-  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS });
+  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS, onChange: () => runtime.emit('tasks.changed', {}) });
   const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
   // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
   // becomes a founder card and marks the ticket escalated.
@@ -166,7 +167,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
-  registerCommands(runtime, { store, version, decisions, orchestrator });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: createTeamsOverview({ store }) });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).

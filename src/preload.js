@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('api', {
   goals: {
     list: (args) => invoke('goals.list', args),
   },
+  teams: {
+    list: () => invoke('teams.list'),
+  },
   agents: {
     pause: (args) => invoke('agents.pause', args),
   },

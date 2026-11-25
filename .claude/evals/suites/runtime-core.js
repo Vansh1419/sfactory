@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list']), `got ${json(runtime.commands())}`);
     },
   },
   {
@@ -315,6 +315,34 @@ const cases = [
       const bad = [await runtime.invoke('goals.list', { limit: 51 }), await runtime.invoke('goals.list', { limit: 0 }), await runtime.invoke('goals.list', { limit: 'x' }), await runtime.invoke('goals.list', { status: 'done' })];
       const ok = plain.ok && json(plain.data.goals) === json(goals) && limited.ok && calls.length === 2 && calls[0].limit <= 50 && calls[1].limit === 5 && bad.every((r) => r.error?.code === 'invalid_args');
       return verdict(ok, `plain ${json(plain)}, calls ${json(calls)}, bad ${json(bad.map((r) => r.error?.code))}`);
+    },
+  },
+  {
+    // teams.list (step 2.5, Nov 25, 2026) is how the window's Teams page shows each team's agents, open tasks and blocked tasks.
+    id: 'teams-list-returns-the-overview-and-takes-no-options',
+    async check() {
+      let calls = 0;
+      const overview = { at: '2026-11-25T10:00:00.000Z', teams: [{ team: 'support', label: 'Customer Support', agents: [], counts: {}, open: [], blocked: [] }] };
+      const { runtime } = setupWithCommands({}, { teams: { async list() { calls += 1; return overview; } } });
+      const plain = await runtime.invoke('teams.list', {});
+      const bad = [await runtime.invoke('teams.list', { limit: 5 }), await runtime.invoke('teams.list', { team: 'support' })];
+      return verdict(plain.ok && json(plain.data) === json(overview) && calls === 1 && bad.every((r) => r.error?.code === 'invalid_args'), `plain ${json(plain)}, calls ${calls}, bad ${json(bad.map((r) => r.error?.code))}`);
+    },
+  },
+  {
+    id: 'teams-list-without-an-overview-says-not-available-and-a-failure-is-generic',
+    async check() {
+      const none = await setupWithCommands().runtime.invoke('teams.list', {});
+      const failing = await setupWithCommands({}, { teams: { async list() { throw new Error('connection to db.internal failed SECRETVALUE5'); } } }).runtime.invoke('teams.list', {});
+      return verdict(none.error?.code === 'not_available' && failing.error?.code === 'internal_error' && !json(failing).includes('SECRETVALUE5') && !json(failing).includes('db.internal'), json({ none, failing }));
+    },
+  },
+  {
+    id: 'teams-list-is-audited-like-any-other-command',
+    async check() {
+      const { store, runtime } = setupWithCommands({}, { teams: { async list() { return { at: 'x', teams: [] }; } } });
+      await runtime.invoke('teams.list', {});
+      return verdict(inserts(store).some((e) => e[1] === 'audit_log' && e[2].action === 'command.teams.list'), json(inserts(store).map((e) => e[2].action)));
     },
   },
   {

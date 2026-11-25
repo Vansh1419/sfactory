@@ -33,7 +33,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -104,6 +104,19 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
     handler: async (args) => {
       if (!orchestrator) throw new CommandError('not_available', 'Goals are not available right now.');
       return { goals: await orchestrator.listGoals({ limit: args.limit ?? DEFAULT_GOALS }) };
+    },
+  });
+
+  // Each team's agents, open tasks and blocked tasks, for the window's Teams page (step 2.5). Read only, takes no options. Audited like every
+  // other command: the page refreshes when the runtime announces `tasks.changed` (and when the window is focused or the founder asks), not
+  // on a timer, so this does not flood the audit log.
+  runtime.register('teams.list', {
+    validate(args) {
+      return unknownKey(args, []);
+    },
+    handler: async () => {
+      if (!teams) throw new CommandError('not_available', 'The teams are not available right now.');
+      return teams.list();
     },
   });
 

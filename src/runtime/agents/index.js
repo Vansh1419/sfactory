@@ -48,7 +48,7 @@ function checkRequest(input) {
   return problems;
 }
 
-function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, configDir, skillsDir, limits } = {}) {
+function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, configDir, skillsDir, limits, onChange } = {}) {
   async function buildTeam(input) {
     try {
       const bad = checkRequest(input);
@@ -82,7 +82,7 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
         router,
         workers: input.workers.map((w) => ({ name: w.name, summary: typeof w.summary === 'string' ? w.summary : '' })),
       });
-      const built = createTeam({ team, lead, workers, store, audit });
+      const built = createTeam({ team, lead, workers, store, audit, onChange });
       try {
         await built.register();
       } catch {

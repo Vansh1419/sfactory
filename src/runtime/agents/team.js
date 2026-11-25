@@ -45,7 +45,15 @@ const WORKER_STOPPED = Object.freeze({
   bad_task: 'The subtask was not usable.',
 });
 
-function createTeam({ team, lead, workers, store, audit, maxRevisions } = {}) {
+function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange } = {}) {
+  // Tells the app that a task or an agent changed (the Teams page then refreshes). It is a hint only: if it throws, nothing else changes.
+  const changed = () => {
+    try {
+      onChange?.();
+    } catch {
+      // A screen that cannot be told is not a reason to stop a task.
+    }
+  };
   const revisions = Number.isInteger(maxRevisions) && maxRevisions >= 0 ? Math.min(maxRevisions, ABSOLUTE_MAX_REVISIONS) : DEFAULT_MAX_REVISIONS;
 
   /** Give every agent a row in `agents`, once: a second call finds the rows and changes nothing. */
@@ -56,6 +64,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions } = {}) {
       const row = existing ?? (await store.insert('agents', { name: agent.name, team, role, model_tier: tier }));
       agent.id = row.id;
     }
+    changed();
   }
 
   async function runTask(request) {
@@ -86,6 +95,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions } = {}) {
         throw new TeamError('store_failed');
       }
       current = to;
+      changed();
     }
 
     async function block(reason, extra = {}) {
@@ -101,6 +111,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions } = {}) {
         throw new TeamError('store_failed');
       }
       current = 'queued';
+      changed();
 
       const planned = await lead.plan({ taskId, title, description: description ?? '' });
       if (!planned.ok) return await block(planned.reason === 'model_unavailable' ? 'No model could answer, so the lead could not plan this task.' : 'The lead could not make a usable plan for this task.');

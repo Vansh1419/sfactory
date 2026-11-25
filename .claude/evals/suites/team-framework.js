@@ -122,7 +122,7 @@ async function makeTeam(script, over = {}) {
   const workers = {};
   for (const n of names) workers[n] = createAgent({ name: n, role: 'worker', team: 'support', instructions: 'Be kind.', router, tools: loader, policy, audit, limits: over.limits });
   const lead = createLead({ name: 'Lee', team: 'support', instructions: 'Lead the team.', router, audit, workers: names.map((n) => ({ name: n, summary: `${n} writes replies.` })) });
-  const team = createTeam({ team: 'support', lead, workers, store: env.store, audit, maxRevisions: over.maxRevisions });
+  const team = createTeam({ team: 'support', lead, workers, store: env.store, audit, maxRevisions: over.maxRevisions, onChange: over.onChange });
   await team.register();
   return { team, router, lead, workers, env };
 }
@@ -436,6 +436,23 @@ const cases = [
       const built = await factory.buildTeam({ team: 'support', lead: { name: 'Lex' }, workers: [{ name: 'Wyl' }] });
       const r = await built.team.runTask(task('limits'));
       return verdict(r.status === 'blocked' && router.calls.filter((c) => c.kind === 'worker').length === 2, json({ r, workers: router.calls.filter((c) => c.kind === 'worker').length }));
+    },
+  },
+  {
+    id: 'the-app-is-told-when-a-task-or-an-agent-changes-and-a-failing-listener-never-stops-the-task',
+    // The window's Teams page refreshes on this (step 2.5). It is a hint: it fires when the agents are registered, when a task is created and
+    // on every status change, it is optional, and if the listener throws the task goes on exactly as before.
+    async check() {
+      let told = 0;
+      const h = await makeTeam({}, { onChange: () => { told += 1; } });
+      const afterRegister = told;
+      const r = await h.team.runTask(task('told'));
+      const plain = await makeTeam({});
+      const rPlain = await plain.team.runTask(task('no-listener'));
+      const boom = await makeTeam({}, { onChange: () => { throw new Error('the window is gone'); } });
+      const rBoom = await boom.team.runTask(task('listener-throws'));
+      const trail = statusTrail(await auditFor(h.env, r.taskId));
+      return verdict(afterRegister >= 1 && r.status === 'done' && told - afterRegister === 1 + 3 && trail === 'in_progress,in_review,done' && rPlain.status === 'done' && rBoom.status === 'done' && (await taskRow(boom.env, rBoom.taskId)).status === 'done', json({ afterRegister, told, status: [r.status, rPlain.status, rBoom.status], trail }));
     },
   },
 ];

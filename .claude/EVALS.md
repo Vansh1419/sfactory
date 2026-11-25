@@ -54,7 +54,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `phase1-gate` | `scripts/gate1.js` (Gate 1, also run by hand with `npm run gate:1`) | 3 | 100% | 1.11 | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
 | `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
-| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 21 | 100% | 2.1 | pass |
+| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 22 | 100% | 2.1 | pass |
 | `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
 | `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 21 | 100% | 2.2 | pass |
 | `search-tool` | `src/runtime/tools/search.js` (web search through Tavily) | 8 | 100% | 2.3 (search) | pass |
@@ -63,8 +63,10 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
 | `ticket-tools` | `src/runtime/tools/tickets.js` (read a ticket a team has taken, record that it was answered), on a real Postgres | 9 | 100% | 2.4 (tickets) | pass |
 | `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 12 | 100% | 2.4 | pass |
+| `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 6 | 100% | 2.5 | pass |
+| `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 11 | 100% | 2.5 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
-| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
+| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 33 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
@@ -424,7 +426,7 @@ Covers: one JSON action per model call (a tool, or finish); the first prompt hol
 
 Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/agents/lead.js`, `team.js` and `index.js` (the factory). Real Postgres with the real migrations: the `tasks`, `agents` and `audit_log` rows are real. The model is scripted; the policy, tool config, skills and tool loader are real.
 
-**Cases:** 21
+**Cases:** 22
 
 The step 2.1 "done when" is the first two cases: a team of one lead and one worker completes a task (queued, in_progress, in_review, done, with the lead's review before done), and **the lead rejects a bad worker output once, the worker tries again with the feedback in its prompt, and the task is done**. Also: rejected twice blocks the task with a reason and it is never done; a review that is not a plain `accept: true` (yes, "true", 1, `{}`, garbage, no answer) counts as a rejection; zero allowed revisions blocks at the first rejection; a plan naming an unknown worker, empty, too long or garbled runs no worker and blocks the task; a two-subtask plan runs in order and stops at the first block; a worker that needs the founder blocks the task and hands the request back, a worker that stops or fails blocks it with a plain reason; every status change is audited before it is made and an audit failure leaves the status where it was; the audit log has the task from creation to done in order; agents are registered once with the right role and tier; a task with no or an odd title is refused with no row and no model call; a secret in a task is never stored or logged. The factory: builds a team from `shared` plus its own tools and skills and no other team's, refuses to build without the company charter, refuses unknown teams and odd names, reports config problems, never gives a team a tool with no policy rule, and passes its limits to every agent.
 
@@ -537,7 +539,7 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were each introduced i
 
 Suite: `.claude/evals/suites/runtime-core.js`. No dataset; each case is a check function with an in-memory fake store that records every call. Code under test: `src/runtime/config.js`, `audit.js`, `runtime.js`, `commands.js` and `src/ipc-guard.js`.
 
-**Cases:** 30
+**Cases:** 33
 
 Contract: the full contract (function signatures, error codes, the store interface) is in the header of the suite file. Nothing here touches Electron, the network or a real database, so it runs in milliseconds. The Electron wiring (`src/main.js`, `src/ipc.js`, `src/preload.js`) is covered by the `invariants` checks, and by launching the real app (see PLAN.md step 1.2).
 
@@ -639,6 +641,22 @@ Suite: `.claude/evals/suites/support-team.js`. The step 2.4 "done when", on a re
 **Cases:** 12
 
 Covers: **a routine ticket is answered with a reply that went through the gate (a message from the support team awaiting the founder, with its card) and recorded, and nothing is sent**; **a refund request becomes a pending founder card in the spend category with the customer's message under "Show details", the ticket is marked escalated with that decision, and no message is written to the customer**; a discount (launch or pricing), a complaint and a legal question (legal or public) do the same; the customer's words reach the agent only inside the fenced result of `tickets.get`, never in the task; two runs started together on one ticket answer it once; a run that does not answer, a lead that rejects work that did not answer, and a model that cannot be reached all put the ticket back to open, while a rejection after the reply was already made leaves it answered (not reopened, so the customer is not emailed twice); if the card cannot be made the ticket goes back to open and the result says so; a bad or unknown id and a team without the charter run nothing and ask no model; `workNext` takes the oldest open ticket and says none when there is none; the team's tools are exactly the files list, with `refund.issue`, `discount.grant`, `complaint.escalate` and `legal.escalate` having no tool at all, only an always-ask rule in the right category; its skills are the shared ones plus its own four, and the sales skills are not in them. A worker that sends the reply but forgets `tickets.mark_answered` (a real model did exactly this on Nov 25, 2026) still gets the ticket recorded as answered by the team, using the outbound service's `latestReplyFor`, and the ticket is not reopened. Checked by mutation on Nov 25, 2026: filing the card without marking the ticket escalated was caught. Found while writing it: the lead model writes the worker's instructions, so the task now tells the lead to put the ticket id in them.
+
+### teams-overview
+
+Suite: `.claude/evals/suites/teams-overview.js`. Code under test: `src/runtime/teams/overview.js`, on a real Postgres with the migrations (the `agents` and `tasks` tables). Each case uses its own team so the counts are exact.
+
+**Cases:** 6
+
+Covers: every team is listed in a fixed order with a plain label even when it has nothing; the page matches the data (counts per state, open tasks with the agent they are assigned to, blocked tasks with their reason, the latest finished ones, cancelled tasks never shown); **a task that changes status moves in the next listing and a removed agent disappears**; only plain short fields come back (never a description or a pod id) and text is cut and stripped of control characters; done work is counted up to a limit with the latest five listed newest first; a failing store throws. Checked by mutation on Nov 25, 2026: showing every task under every team was caught.
+
+### teams-view
+
+Suite: `.claude/evals/suites/teams-view.js`. Code under test: `src/renderer/teams.mjs` (plain functions, no React) and the rules for `src/renderer/TeamsPanel.jsx` (read as text).
+
+**Cases:** 11
+
+Covers: a team's status says what needs a person first (blocked), then what is being worked on, then what waits, then caught up, no work yet or not started; every task state has a row in plain words and a count cut at its limit shows a plus sign; agents show role and state in plain words and an unknown one is still shown; open tasks say their state, who has them and how long ago they started; a blocked task always shows why; text from the database is passed through as text and never turned into markup; odd or missing fields never throw; the page headline, the order of the teams and the updated label; a `tasks.changed` announcement and the runtime becoming ready mean load again; the page component has no way to build markup from text, **no timer that polls the runtime** (every call is audited), refreshes on announcements, on focus and from a button, and reaches the runtime only through `window.api`; and end to end with the real overview, a change in the data changes what the page shows on the next load. Checked by mutation on Nov 25, 2026: putting "working" above "blocked" and adding a polling timer to the page were each caught.
 
 ## Planned evals (not built yet)
 
