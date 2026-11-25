@@ -3,6 +3,7 @@
 // Pods (PLAN.md step 3.1). A pod is one project's own space: a folder, a git history, a memory space and its agents. Opening one is a
 // commitment, so the founder approves a card first:
 //
+//   setPriority({ podId, priority })  -> { podId, priority, previous }   (step 3.5)
 //   propose({ name, template, clientId?, service?, priority?, deadline?, note? })
 //        files a founder card (the action is `pod.create`, an always-ask rule with no tool behind it) and writes nothing else:
 //        no project, no folder, no pod. Returns { ok, decisionId, projectId }.
@@ -374,7 +375,29 @@ function createPods({ store, audit, decisions, runtime, templatesDir, root, allo
     return typeof project?.github_repo === 'string' ? project.github_repo : null;
   }
 
-  return { propose, open, start, stop, list, folderFor, repoFor, templates: describeTemplates, problems: loaded.problems, PodError };
+  /**
+   * Change a project's priority (P1, P2 or P3). It is audited first, and nothing changes if the runtime is blocked or the audit entry cannot be written.
+   * Shared specialists serve the highest priority first, using the priority as it is at that moment (step 3.5). The note in the project's own folder
+   * is not rewritten: the database is the source of truth for the priority.
+   */
+  async function setPriority(input) {
+    const reason = isBlocked();
+    if (reason) throw fail('blocked', reason);
+    if (!isObject(input) || Object.keys(input).some((k) => !['podId', 'priority'].includes(k))) throw fail('invalid', 'Only a project and a priority can be given.');
+    if (typeof input.podId !== 'string' || !UUID.test(input.podId)) throw fail('invalid', 'The project (pod) id is not valid.');
+    if (!PRIORITIES.includes(input.priority)) throw fail('invalid', `priority must be one of: ${PRIORITIES.join(', ')}.`);
+    const podId = input.podId.toLowerCase();
+    const [pod] = await store.select('pods', { where: { id: podId }, limit: 1 });
+    if (!pod || pod.status !== 'open') throw fail('not_found', 'There is no open project with that id.');
+    const [project] = await store.select('projects', { where: { id: pod.project_id }, limit: 1 });
+    if (!project) throw fail('not_found', 'There is no open project with that id.');
+    await record('pod.priority_changed', podId, { from: project.priority, to: input.priority }, podId);
+    const changed = await store.update('projects', { id: project.id }, { priority: input.priority, updated_at: now().toISOString() });
+    if (!Array.isArray(changed) || changed.length === 0) throw fail('not_found', 'There is no open project with that id.');
+    return { podId, priority: input.priority, previous: project.priority };
+  }
+
+  return { propose, open, start, stop, list, folderFor, repoFor, setPriority, templates: describeTemplates, problems: loaded.problems, PodError };
 }
 
 module.exports = { createPods, PodError, slugOf, runGit };

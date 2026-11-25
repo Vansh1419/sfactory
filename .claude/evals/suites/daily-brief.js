@@ -7,7 +7,8 @@
 //
 // ONE source for both screens: the window shows the sections' lines and Telegram sends the text built from those very lines.
 // What the cases pin down:
-//   - the sections and their order: Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests; revenue and deployments have no data
+//   - the sections and their order: Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests, Shared specialists (step 3.5, whose lines are graded in
+//     `specialist-queue`; here it only says "Not tracked yet" when no queue is connected); revenue and deployments have no data
 //     source yet and say so plainly (never an invented number)
 //   - the figures match the data, "recent" means the last 24 hours exactly, money is shown in rupees and dollars, and the date and time are IST
 //   - text from the database is shown as text, cut and stripped of control characters, and the Telegram text has no markup and stays short
@@ -58,14 +59,14 @@ async function database() {
 
 const cases = [
   {
-    id: 'the-brief-has-the-six-sections-in-order-and-revenue-and-deployments-say-plainly-that-they-are-not-tracked-yet',
+    id: 'the-brief-has-the-seven-sections-in-order-and-revenue-deployments-and-an-unconnected-specialist-queue-say-plainly-that-they-are-not-tracked-yet',
     async check() {
       const b = await briefOf({});
       const rev = section(b, 'revenue');
       const dep = section(b, 'deployments');
-      return verdict(b.sections.map((s) => s.key).join() === 'waiting,revenue,leads,tickets,deployments,spend' && b.sections.map((s) => s.title).join('|') === 'Waiting for you|Revenue|Leads|Tickets|Deployments|Spend requests'
+      return verdict(b.sections.map((s) => s.key).join() === 'waiting,revenue,leads,tickets,deployments,spend,specialists' && b.sections.map((s) => s.title).join('|') === 'Waiting for you|Revenue|Leads|Tickets|Deployments|Spend requests|Shared specialists'
         && rev.available === false && /^Not tracked yet/.test(rev.lines[0]) && !/[₹$\d]/.test(rev.lines[0]) && dep.available === false && /^Not tracked yet/.test(dep.lines[0]) && !/\d/.test(dep.lines[0])
-        && ['waiting', 'leads', 'tickets', 'spend'].every((k) => section(b, k).available === true) && b.sections.every((s) => s.lines.length >= 1 && s.lines.every((l) => typeof l === 'string' && l.length > 0)), json(b.sections.map((s) => [s.key, s.available])));
+        && ['waiting', 'leads', 'tickets', 'spend'].every((k) => section(b, k).available === true) && section(b, 'specialists').available === false && /^Not tracked yet/.test(section(b, 'specialists').lines[0]) && b.sections.every((s) => s.lines.length >= 1 && s.lines.every((l) => typeof l === 'string' && l.length > 0)), json(b.sections.map((s) => [s.key, s.available])));
     },
   },
   {
@@ -182,7 +183,7 @@ const cases = [
       const fails = (table) => ({ select: async (t) => { if (t === table) throw new Error('database said sb_secret_ABCDEFGHIJKLMNOP'); return []; } });
       const results = [];
       for (const table of ['clients', 'tickets', 'decisions', 'tasks']) results.push(await briefWith(fails(table)).get().then(() => 'returned', (err) => /database said/.test(err.message)));
-      return verdict(real.sections.length === 6 && real.sections.every((s) => s.lines.length > 0) && /^Brief for /.test(real.headline) && results.every((r) => r === true), json({ sections: real.sections.length, results }));
+      return verdict(real.sections.length === 7 && real.sections.every((s) => s.lines.length > 0) && /^Brief for /.test(real.headline) && results.every((r) => r === true), json({ sections: real.sections.length, results }));
     },
   },
   {
@@ -206,7 +207,7 @@ const cases = [
 
 module.exports = {
   name: 'daily-brief',
-  description: 'Daily brief (step 2.6): six sections with figures that match the data, last 24 hours, IST, money in rupees and dollars, not-tracked sections say so, one source for the window and the Telegram text',
+  description: 'Daily brief (step 2.6): seven sections with figures that match the data, last 24 hours, IST, money in rupees and dollars, not-tracked sections say so, one source for the window and the Telegram text',
   threshold: 1,
   cases: () => cases,
   run: (c) => c.check(),

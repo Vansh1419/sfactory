@@ -47,6 +47,7 @@ const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
 const { createPods } = require('./pods/service');
+const { createSpecialists } = require('./specialists');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -69,7 +70,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -201,7 +202,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
   // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
-  const brief = createBrief({ store, decisions });
+  // Shared specialists (step 3.5): the queue they serve in, highest priority first. The brief reads it through this service and names every conflict.
+  const specialists = createSpecialists({ store, audit, isBlocked });
+  const brief = createBrief({ store, decisions, specialists });
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
   const jobs = createTeamJobs({ sales, support, emit, onError: () => runtime.emit('teams.error', {}) });
@@ -244,6 +247,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     support,
     engineering,
     finance,
+    specialists,
     pods,
     problems: [],
 

@@ -2,13 +2,14 @@
 
 // The daily brief (PLAN.md step 2.6): what the founder should know this morning, in plain words. Read only. Graded by the `daily-brief` eval.
 //
-//   createBrief({ store, decisions, now? }).get() -> { at, dateLabel, headline, sections: [{ key, title, available, lines: [string] }] }
+//   createBrief({ store, decisions, specialists?, now? }).get() -> { at, dateLabel, headline, sections: [{ key, title, available, lines: [string] }] }
 //   renderBriefText(brief)             -> the same brief as one plain message (for Telegram)
 //
 // ONE source for both screens: the window shows `sections[].lines` and Telegram sends `renderBriefText(brief)`, which is built from those very
 // lines. So the digest on the phone and the brief in the window cannot say different things: there is no second place where a sentence is written.
 //
-// Sections, in this order: Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests. Revenue and deployments have no data source yet
+// Sections, in this order: Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests, Shared specialists (step 3.5: every shared specialist that
+// more than one project is waiting for, who goes first and who waits; read through the specialists service, never from the tasks table here). Revenue and deployments have no data source yet
 // (no payments and no deployment tool are connected), so they say so plainly instead of showing a number that is not real.
 // Decisions are read only through the decisions service (`decisions.summary`), never from their table here. "Recent" always means the last 24 hours, counted back from now. Times are written in IST. Text that comes from the database (a lead's name)
 // is cut and stripped of control characters; Telegram sends the brief as plain text, never as markup. A failing store throws.
@@ -63,7 +64,26 @@ const money = (inr, usd) => {
   return rupees ?? dollars;
 };
 
-function createBrief({ store, decisions, now = () => new Date() } = {}) {
+const MAX_CONFLICTS_LISTED = 3;
+
+/** One plain line for a specialist that several projects are waiting for: who goes first and who waits. */
+function conflictLine(conflict) {
+  const projects = [];
+  for (const e of conflict.entries) if (!projects.some((p) => p.podId === e.podId)) projects.push(e); // one per project, in serving order
+  const label = (p) => `${plain(p.project, MAX_NAME_CHARS) || 'A project'} (${plain(p.priority, 2)})`;
+  const [first, ...rest] = projects;
+  const same = rest.length > 0 && rest[0].priority === first.priority ? ' They have the same priority, so the earlier request goes first.' : '';
+  return `${plain(conflict.specialist, MAX_NAME_CHARS) || 'A shared specialist'} is wanted by ${projects.length} projects: ${label(first)} goes first; ${rest.map((p) => `${label(p)} waits`).join('; ')}.${same}`;
+}
+
+function specialistLines(conflicts) {
+  if (conflicts.length === 0) return ['No conflicts: no shared specialist has work waiting from more than one project.'];
+  const lines = conflicts.slice(0, MAX_CONFLICTS_LISTED).map(conflictLine);
+  if (conflicts.length > MAX_CONFLICTS_LISTED) lines.push(`...and ${conflicts.length - MAX_CONFLICTS_LISTED} more shared specialists with competing projects.`);
+  return lines;
+}
+
+function createBrief({ store, decisions, specialists, now = () => new Date() } = {}) {
   async function get() {
     const moment = now();
     const since = moment.getTime() - DAY_MS;
@@ -77,6 +97,7 @@ function createBrief({ store, decisions, now = () => new Date() } = {}) {
     const pending = asList(decided?.waiting);
     const answered = asList(decided?.decided);
     const blocked = asList(await store.select('tasks', { where: { status: 'blocked' }, limit: READ_LIMIT }));
+    const specialistConflicts = specialists ? asList(await specialists.conflicts()) : null;
 
     // ---- Waiting for you ----
     const waiting = [];
@@ -134,6 +155,9 @@ function createBrief({ store, decisions, now = () => new Date() } = {}) {
         { key: 'tickets', title: 'Tickets', available: true, lines: ticketLines },
         { key: 'deployments', title: 'Deployments', available: false, lines: deployments },
         { key: 'spend', title: 'Spend requests', available: true, lines: spendLines },
+        specialists
+          ? { key: 'specialists', title: 'Shared specialists', available: true, lines: specialistLines(specialistConflicts) }
+          : { key: 'specialists', title: 'Shared specialists', available: false, lines: ['Not tracked yet. The shared specialist queue is not connected here, so there is nothing to report.'] },
       ],
     };
   }

@@ -4,6 +4,8 @@
 //
 //   npm run pod -- propose --name "Acme site" --template agency_client [--client-id <id>] [--service web_development] [--priority P1] [--deadline 2026-12-31] [--note "…"]
 //   npm run pod -- list
+//   npm run pod -- priority <pod id> P1|P2|P3     (step 3.5: shared specialists serve the highest priority first)
+//   npm run pod -- queue                          (who is waiting for a shared specialist, and the order they will be served in)
 //
 // `propose` puts one plain-language card in front of you (in the window and on Telegram) and writes nothing else: no project, no folder.
 // When you approve it, the app that is running opens the space (its folder, its git history, a first memory note and its agents); this
@@ -15,7 +17,7 @@ const { createApp } = require('../src/runtime');
 
 const ROOT = path.join(__dirname, '..');
 const OPTIONS = { name: 'name', template: 'template', 'client-id': 'clientId', service: 'service', priority: 'priority', deadline: 'deadline', note: 'note', 'github-repo': 'githubRepo' };
-const USAGE = 'Usage: npm run pod -- propose --name "Acme site" --template agency_client|saas_product [--client-id <id>] [--service web_development|ai_automation|marketing|content] [--priority P1|P2|P3] [--deadline 2026-12-31] [--note "…"] [--github-repo owner/name]\n       npm run pod -- list';
+const USAGE = 'Usage: npm run pod -- propose --name "Acme site" --template agency_client|saas_product [--client-id <id>] [--service web_development|ai_automation|marketing|content] [--priority P1|P2|P3] [--deadline 2026-12-31] [--note "…"] [--github-repo owner/name]\n       npm run pod -- list\n       npm run pod -- priority <pod id> P1|P2|P3\n       npm run pod -- queue';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function readProposal(argv) {
@@ -31,7 +33,8 @@ function readProposal(argv) {
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const proposal = command === 'propose' ? readProposal(rest) : null;
-  if (!(command === 'list' && rest.length === 0) && !proposal) {
+  const simple = (command === 'list' && rest.length === 0) || (command === 'queue' && rest.length === 0) || (command === 'priority' && rest.length === 2);
+  if (!simple && !proposal) {
     console.error(USAGE);
     return 2;
   }
@@ -63,6 +66,13 @@ async function main() {
       const pods = await app.pods.list();
       if (pods.length === 0) console.log('No project spaces yet.');
       for (const p of pods) console.log(`${p.name} (${p.template === 'agency_client' ? 'client project' : 'own product'}, ${p.priority}, ${p.status}) id ${p.id}, in ${p.folder}`);
+    } else if (command === 'priority') {
+      const changed = await app.pods.setPriority({ podId: rest[0], priority: rest[1] });
+      console.log(`The project is now ${changed.priority} (it was ${changed.previous}). Shared specialists serve the highest priority first, and work already waiting is re-ordered.`);
+    } else if (command === 'queue') {
+      const waiting = await app.specialists.queue();
+      if (waiting.length === 0) console.log('No shared specialist has work waiting.');
+      for (const e of waiting) console.log(`${e.specialist}: ${e.project} (${e.priority}) - ${e.title}, waiting since ${e.waitingSince}`);
     } else {
       await app.pods.propose(proposal);
       console.log('A card is waiting for your answer (in the window and on Telegram). Nothing has been made yet.');
@@ -70,7 +80,7 @@ async function main() {
     }
   } catch (err) {
     // Our own errors are written for the founder; anything else stays generic.
-    console.error(err?.name === 'PodError' || err?.name === 'DecisionError' ? err.message : 'The request could not be made.');
+    console.error(err?.name === 'PodError' || err?.name === 'DecisionError' || err?.name === 'SpecialistError' ? err.message : 'The request could not be made.');
     if (Array.isArray(err?.problems)) console.error(err.problems.join('\n'));
     code = 1;
   }
