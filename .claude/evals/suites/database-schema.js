@@ -600,6 +600,48 @@ const cases = [
     },
   },
   {
+    // Step 3.1 (Nov 26, 2026): opening a pod is the founder's decision. The database refuses a pod on any decision but an approved `pod.create`, and
+    // one decision opens one pod.
+    id: 'a-pod-opened-on-a-decision-needs-an-approved-pod-create-decision-and-one-decision-opens-one-pod',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const project = async (name) => idOf(await tx.query("insert into projects (name, kind) values ($1, 'agency_client') returning id", [name]));
+        const decision = async (status, tool) => idOf(await tx.query(`insert into decisions (category, action, card, status${status === 'pending' ? '' : ', resolved_at, resolved_via'}) values ('people_or_contracts', $1::jsonb, $2, '${status}'${status === 'pending' ? '' : ", now(), 'telegram'"}) returning id`, [JSON.stringify({ tool, access: 'write', args: {} }), CARD]));
+        const open = (projectId, decisionId) => attempt(tx, "insert into pods (project_id, template, decision_id) values ($1, 'agency_client', $2) returning id", [projectId, decisionId]);
+
+        const good = await decision('approved', 'pod.create');
+        const first = await open(await project('First'), good);
+        if (!first.ok) problems.push(`control failed: an approved pod.create decision could not open a pod (${first.error})`);
+        if ((await open(await project('Second'), good)).ok) problems.push('one decision opened two pods');
+        for (const [label, id] of [['a pending decision', await decision('pending', 'pod.create')], ['a rejected decision', await decision('rejected', 'pod.create')], ['an approved decision of another kind', await decision('approved', 'razorpay.create_payout')], ['a decision that does not exist', '00000000-0000-4000-8000-000000000000']]) {
+          if ((await open(await project(label), id)).ok) problems.push(`a pod was opened on ${label}`);
+        }
+        if (!(await attempt(tx, "insert into pods (project_id, template) values ($1, 'saas_product') returning id", [await project('No card')])).ok) problems.push('a pod without a decision (the dev seed and the isolation tests) could not be made');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'what-a-pod-was-opened-for-is-fixed-and-a-closed-pod-stays-closed',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const projectA = idOf(await tx.query("insert into projects (name, kind) values ('A', 'agency_client') returning id"));
+        const projectB = idOf(await tx.query("insert into projects (name, kind) values ('B', 'agency_client') returning id"));
+        const decisionId = idOf(await tx.query("insert into decisions (category, action, card, status, resolved_at, resolved_via) values ('people_or_contracts', $1::jsonb, $2, 'approved', now(), 'telegram') returning id", [JSON.stringify({ tool: 'pod.create', access: 'write', args: {} }), CARD]));
+        const pod = idOf(await tx.query("insert into pods (project_id, template, decision_id) values ($1, 'agency_client', $2) returning id", [projectA, decisionId]));
+        for (const [col, value] of [['project_id', `'${projectB}'`], ['template', "'saas_product'"], ['decision_id', 'null'], ['opened_at', "now() - interval '1 day'"]]) {
+          if ((await attempt(tx, `update pods set ${col} = ${value} where id = $1`, [pod])).ok) problems.push(`${col} of a pod could be changed`);
+        }
+        if (!(await attempt(tx, "update pods set status = 'closed', closed_at = now() where id = $1", [pod])).ok) problems.push('control failed: an open pod could not be closed');
+        if ((await attempt(tx, "update pods set status = 'open', closed_at = null where id = $1", [pod])).ok) problems.push('a closed pod was reopened');
+        if (!(await attempt(tx, "update pods set closed_at = closed_at where id = $1", [pod])).ok) problems.push('a closed pod could not be left as it is');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
     id: 'tickets-are-service-only-and-never-visible-to-a-pod',
     async check(db) {
       const problems = [];

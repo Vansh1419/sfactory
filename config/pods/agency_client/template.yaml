@@ -1,0 +1,15 @@
+# The agency client pod (PLAN.md step 3.1): a project done for a paying client, in one of our four services. Read by src/runtime/pods/templates.js
+# when a pod is created, and graded by the `pod-creation` eval.
+#
+#   description  one plain sentence for the founder's card
+#   teams        whose agents join the pod when it opens (agents shared by every pod never join: they serve all of them)
+#   files        the files copied into the new pod's folder, from the `files` folder next to this one; {{name}}, {{client}}, {{service}}, {{deadline}},
+#                {{priority}} and {{note}} are filled in with plain text. Nothing here is ever run.
+description: A project for a paying client, in web development, AI automation, marketing or content.
+teams:
+  - product_engineering
+  - support
+files:
+  - README.md
+  - BRIEF.md
+  - .gitignore

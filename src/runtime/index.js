@@ -37,6 +37,7 @@ const { createSupportTeam } = require('./teams/support');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
+const { createPods } = require('./pods/service');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +52,7 @@ const AGENT_LIMITS = Object.freeze({ maxSteps: 10, maxTokens: 60_000 });
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, additionalTools = [], mailSend, providers }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, podTemplatesDir, podsRoot, additionalTools = [], mailSend, providers }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -59,7 +60,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -171,6 +172,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
   // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
+  // Pods (step 3.1): a project's own space. The founder approves a card, then the folder, git history, memory note and agents are made.
+  // PODS_ROOT (an absolute path) wins over the folder main.js passes; with neither, a pod can be asked for but not opened.
+  const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, isBlocked, onError: () => runtime.emit('pods.error', {}) });
   const brief = createBrief({ store, decisions });
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
@@ -212,6 +216,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     agents,
     sales,
     support,
+    pods,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -236,6 +241,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
         if (digestIssue) runtime.emit('digest.problem', { message: digestIssue });
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
+        pods.start(); // listens for the founder's answers on pod cards, then opens any approved one that has no pod yet
         outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed
         if (approval.problem) runtime.emit('outbound.problem', { message: approval.problem });
         return { ok: true };
@@ -251,6 +257,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
       telegram?.stop();
       orchestrator.stop();
       outbound.stop();
+      pods.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });

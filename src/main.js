@@ -41,7 +41,7 @@ function initRuntime() {
   } catch {
     // No .env: the runtime reports exactly what is missing.
   }
-  sfactory = createApp({ env: process.env, version: app.getVersion(), filesystemRoot: app.getAppPath(), toolConfigDir: path.join(app.getAppPath(), 'config', 'mcp'), skillsDir: path.join(app.getAppPath(), '.claude', 'skills') });
+  sfactory = createApp({ env: process.env, version: app.getVersion(), filesystemRoot: app.getAppPath(), toolConfigDir: path.join(app.getAppPath(), 'config', 'mcp'), skillsDir: path.join(app.getAppPath(), '.claude', 'skills'), podTemplatesDir: path.join(app.getAppPath(), 'config', 'pods'), podsRoot: path.join(app.getPath('userData'), 'pods') });
   ipc = setupIpc({
     runtime: sfactory.runtime,
     rendererFileUrl: pathToFileURL(RENDERER_FILE).href,

@@ -611,6 +611,34 @@ const checks = [
         && c.log.length === 0 && err !== null, `${text} | writes ${c.log.length} | err ${err?.message}`);
     },
   },
+  {
+    // Step 3.1 (Nov 26, 2026). The pods service opens a pod from an approved `pod.create` card, and finds the ones answered while the app was closed
+    // through this read-only list, so it never reads a decision's status itself.
+    id: 'list-approved-gives-the-approved-cards-of-one-tool-newest-first-and-writes-nothing',
+    async check() {
+      const c = await setup();
+      const pod = { tool: 'pod.create', access: 'write', args: { name: 'x' } };
+      const [a, b, rejected, waiting, spend] = [await file(c, { action: pod }), await file(c, { action: pod }), await file(c, { action: pod }), await file(c, { action: pod }), await file(c)];
+      c.state.now = new Date('2026-11-26T10:00:00Z');
+      await c.service.resolve({ id: a.id, decision: 'approved', via: 'dashboard' });
+      c.state.now = new Date('2026-11-26T10:05:00Z');
+      await c.service.resolve({ id: b.id, decision: 'approved', via: 'telegram' });
+      await c.service.resolve({ id: rejected.id, decision: 'rejected', via: 'telegram' });
+      await c.service.resolve({ id: spend.id, decision: 'approved', via: 'telegram' });
+      c.log.length = 0;
+      const all = await c.service.listApproved({ tool: 'pod.create' });
+      const one = await c.service.listApproved({ tool: 'pod.create', limit: 1 });
+      const none = await c.service.listApproved({ tool: 'nothing.here' });
+      const oddLimit = await c.service.listApproved({ tool: 'pod.create', limit: 'many' });
+      const noTool = await thrown(() => c.service.listApproved({}));
+      const writes = c.log.length;
+      c.state.blocked = 'The runtime cannot write its audit log.';
+      const blocked = await thrown(() => c.service.listApproved({ tool: 'pod.create' }));
+      return verdict(all.map((d) => d.id).join() === [b.id, a.id].join() && one.length === 1 && one[0].id === b.id && none.length === 0 && oddLimit.length === 2
+        && !all.some((d) => d.id === waiting.id || d.id === rejected.id || d.id === spend.id) && noTool?.code === 'invalid_input' && writes === 0 && blocked !== null,
+      json({ all: all.map((d) => d.id), one: one.length, none: none.length, oddLimit: oddLimit.length, noTool: noTool?.message, writes, blocked: blocked?.message }));
+    },
+  },
 ];
 
 module.exports = {

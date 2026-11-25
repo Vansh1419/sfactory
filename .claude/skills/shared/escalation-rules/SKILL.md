@@ -34,6 +34,7 @@ Every one of these asks first, whatever the amount or size.
 **A legal document or a public statement**
 - `social.publish_post`, `website.publish_page`, `legal.issue_document`, `press.send_statement`
 - `complaint.escalate` and `legal.escalate`: an unhappy customer, or a question about a contract, terms, privacy or the law, is the founder's to answer. Support uses them to ask the founder, and never replies to that customer itself.
+- `pod.create`: opening a new project space (a folder, its own history, memory and agents) for a client project or one of our own products. Only the founder's answer opens one: ask with a card and wait.
 - `question.escalate`: a customer's question the team cannot answer from facts it has (an invoice, a payment, a date, their project). Support uses it to ask the founder rather than guess or promise a follow-up.
 - `outbound.approve_send` is the founder's approval of an email to a client. You never call it. Write the email with `email.submit` (it saves and reviews it, and never sends) and send it with `email.send`. While approval is required the founder is asked for you, and the email does not go out until they say yes. Never send mail any other way.
 

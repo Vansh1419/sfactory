@@ -49,5 +49,7 @@
   { "id": "edge-write-tool-tagged-read", "action": { "tool": "docs.create_draft", "access": "read", "args": { "title": "x" } }, "expect": { "allowed": false, "category": "unknown" } },
   { "id": "edge-tool-named-like-an-object-key", "action": { "tool": "constructor", "access": "write", "args": {} }, "expect": { "allowed": false, "category": "unknown" } },
   { "id": "edge-no-tool-name", "action": { "access": "read", "args": {} }, "expect": { "allowed": false, "category": "unknown" } },
-  { "id": "edge-action-is-null", "action": null, "expect": { "allowed": false, "category": "unknown" } }
+  { "id": "edge-action-is-null", "action": null, "expect": { "allowed": false, "category": "unknown" } },
+  { "id": "pod-create-needs-the-founder", "action": { "tool": "pod.create", "access": "write", "args": { "name": "Acme site", "template": "agency_client" } }, "expect": { "allowed": false, "category": "people_or_contracts" } },
+  { "id": "question-escalate-needs-the-founder", "action": { "tool": "question.escalate", "access": "write", "args": {} }, "expect": { "allowed": false, "category": "legal_or_public" } }
 ]

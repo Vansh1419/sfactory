@@ -1,0 +1,10 @@
+# The SaaS product pod (PLAN.md step 3.1): a product the company builds and sells itself. Read by src/runtime/pods/templates.js when a pod is created,
+# and graded by the `pod-creation` eval. The fields are the same as in the agency client template.
+description: A software product the company builds and sells itself.
+teams:
+  - product_engineering
+  - marketing_sales
+files:
+  - README.md
+  - BRIEF.md
+  - .gitignore

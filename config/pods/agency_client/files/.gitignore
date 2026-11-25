@@ -1,0 +1,9 @@
+# Never commit secrets or build output.
+.env
+.env.*
+*.pem
+*.key
+node_modules/
+dist/
+build/
+.DS_Store

@@ -103,6 +103,9 @@ const RULES = new Map([
   // must not write a reply that only promises a follow-up (the review refuses it), so it hands the ticket to the founder. Anything the company says
   // to a customer that it has not established is the founder's to say, so this is filed with the legal and public ones.
   ['question.escalate', { ask: CATEGORIES.LEGAL }],
+  // Opening a project space (step 3.1): a new client engagement or product gets its own folder, history, memory and agents. Always the founder's
+  // decision, and there is no tool behind it: the pods service applies the answer.
+  ['pod.create', { ask: CATEGORIES.PEOPLE }],
 ]);
 
 /** Only an exact "preview" target is routine. A missing or odd target is treated as production. */

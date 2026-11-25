@@ -285,7 +285,7 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 
 ### Phase 3: Engineering, Finance and pods (days 15–21)
 
-**3.1 Pod creation** (one day)
+**3.1 Pod creation** (one day) — status: **built and tested (Nov 26, 2026)**; migration `20261126000000_pod_decision.sql` written, **not yet applied** to your project (apply it with `npm run db:migrate` when you say so). `src/runtime/pods/` (`service.js`, `templates.js`), templates in `config/pods/{agency_client,saas_product}/`, `npm run pod -- propose …`, eval `pod-creation` (12 cases) plus 2 in `database-schema`. Opening a pod is an always-ask rule (`pod.create`, category people or contracts) with no tool: the card is the only way in. Left for later steps: the pod folder is not yet the only place an agent may read or write (3.2), and a team that is built after a pod opens joins it only when the pod is opened again (3.3 gives the Engineering team its own members).
 - Create a pod from an agency-client or SaaS template. Fill `pods` and `pod_members`. Creating a pod produces a decision card.
 - **Done when:** approving a card creates a pod with its folder, git repo and memory space.
 

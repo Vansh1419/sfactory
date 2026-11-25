@@ -30,13 +30,13 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | Suite | Grades | Cases | Threshold | Plan step | Today |
 |---|---|---|---|---|---|
 | `invariants` | The repo itself: architecture, security settings, docs in sync | 15 | 100% | 0.4 | pass |
-| `policy-check` | `src/runtime/policy.js` | 44 | 100% | 1.4 | pass |
+| `policy-check` | `src/runtime/policy.js` | 46 | 100% | 1.4 | pass |
 | `decision-cards` | `src/runtime/cards.js` | 52 | 100% | 1.5 | pass |
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 81 | 100% | 1.8 | pass |
-| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 33 | 100% | 1.1 | pass |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 35 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
 | `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 33 | 100% | 1.7d | pass |
@@ -68,10 +68,11 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 14 | 100% | 2.5 | pass |
 | `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
 | `team-jobs` | `src/runtime/teams/jobs.js` (starting the sales or support team from the window) | 7 | 100% | 2.x follow-up | pass |
+| `pod-creation` | `src/runtime/pods/{service,templates}.js`, `config/pods/` and `scripts/pod.js` (the step 3.1 done-when, on a real database and real git) | 12 | 100% | 3.1 | pass |
 | `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 37 | 100% | 1.2 | pass |
-| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 33 | 100% | 1.6 | pass |
+| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 34 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
 Update the "Today" column when a suite's status changes.
@@ -104,7 +105,7 @@ Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check fu
 
 Suite: `.claude/evals/suites/policy-check.js`. Dataset: `.claude/evals/datasets/policy-check.json`. Code under test: `src/runtime/policy.js`. Unit tests that sweep every listed tool (`src/runtime/policy.test.js`) back the dataset up.
 
-**Cases:** 44
+**Cases:** 46
 
 Contract: `checkAction({ tool, access, args?, note? }) -> { allowed, category }`. The full contract is in the header of the suite file. The policy is plain code and denies by default.
 
@@ -528,7 +529,9 @@ Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (a
 
 Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
 
-**Cases:** 33
+**Cases:** 35
+
+Two cases (added Nov 26, 2026 for step 3.1) cover how a pod is opened: a pod that names a decision needs an approved `pod.create` decision (a pending, rejected, other-kind or missing one is refused, and one decision opens only one pod; a pod with no decision, as in the dev seed, is still allowed), and what a pod was opened for (its project, kind, decision and time) cannot be changed and a closed pod stays closed.
 
 Three of these cases (added Nov 25, 2026 for step 2.4) cover the `tickets` table: it is service-only and invisible to a pod; a ticket starts open, what the customer wrote cannot be changed, and a bad address, a line break in the subject or an oversize text is refused; a ticket only moves forward (open, in progress, answered or escalated, closed), is `answered` only with its reply message and `escalated` only with a decision, those links cannot be swapped or removed, and a ticket is never deleted.
 
@@ -573,7 +576,9 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were introduced into t
 
 Suite: `.claude/evals/suites/decisions-service.js`. No dataset; each case is a check function. Code under test: `src/runtime/decisions.js`. Unit tests (`src/runtime/decisions.test.js`, 19 tests, and three end-to-end tests in `runtime.integration.test.js`) back it up against an in-memory store that adds delays between every step.
 
-**Cases:** 33
+**Cases:** 34
+
+Added Nov 26, 2026 (step 3.1): **`listApproved({ tool, limit? })` gives the approved cards of one tool, newest first, and writes nothing.** The pods service uses it to find a pod card answered while the app was closed, so it never reads a decision's status itself (an invariant keeps those inside this service).
 
 How it works: the cases run the service against a **real Postgres with the real migrations** (`scripts/fake-supabase.js`: PGlite behind real HTTP, using the runtime's own REST store), so the integrity triggers are live and "two answers at once" is two real concurrent requests. Each case starts from an empty `decisions` table and logs every write, so it can check the order (audit first) and that a refused call wrote nothing. The full contract (`create`, `resolve`, `cancel`, `get`, `remindDue`, `DecisionError`) is in the header of the suite file.
 
@@ -715,6 +720,14 @@ Suite: `.claude/evals/suites/team-jobs.js`. Code under test: `src/runtime/teams/
 **Cases:** 7
 
 Covers: **a lead is started at once with the checked details and how it ended is announced later** (the runtime event `team.job_finished`); a lead with a bad detail (no company, a web address that is not https, two addresses, a price too long, an extra field) is refused with the reason and no team is called; at most two jobs run at once and a slot is free again when one ends; a ticket job takes the oldest open ticket or the one named and an id that is not an id never reaches the team; a missing team says not available and nothing is counted; what the window is told is fixed sentences and the team's own plain reasons, never an error's text; and a team or a listener that throws never leaves a job counted as running. Checked by mutation on Nov 26, 2026: removing the limit of two was caught.
+
+### pod-creation
+
+Suite: `.claude/evals/suites/pod-creation.js`. Code under test: `src/runtime/pods/service.js` (`createPods`), `templates.js` and the two templates in `config/pods/`; the database rules are in migration `20261126000000_pod_decision.sql` (graded by 2 cases in `database-schema`). Real Postgres with the migrations, the real decisions service and policy, the real event bus and REAL git in a temporary folder. The audit log points at pods and can never be emptied, so these cases do not reset the pods table.
+
+**Cases:** 12
+
+The step 3.1 "done when": **approving a card creates a pod with its folder, git repo and memory space.** Covers: both templates load from real files, and a broken one (a missing file, a file name that leaves the folder, an unknown team, no folder at all) is left out with a plain reason while the other still loads; **asking for a pod files a plain card and writes nothing else** (no project, no folder, no pod; always asks, category people or contracts); **approving it makes** the project, the folder with the template's files filled in (no `{{blank}}` left), a git history with exactly one commit by `sfactory`, the pod, one first memory note and the pod's agents (the template's teams only; no shared specialist and no removed agent), and announces `pod.opened`; an own product has no client and gets its own teams; a no, a card not yet answered, a card of another kind and a bad id make nothing and opening by hand is refused; one card opens one pod even when opened twice at once, and a run that stopped half way is finished **without overwriting a file the founder edited**; a card approved while the app was closed is opened on start, and **starting never touches a card that already has a pod**; the folder is always directly inside the projects folder whatever the name (`../../etc/passwd`, `.`, `/`, accents, 80 characters, control characters) and two projects with one name get two folders; fourteen kinds of bad request are refused in plain words and write nothing; with no projects folder, no templates or a blocked runtime nothing is asked or opened; **every step is audited before it is made** (if the audit log is down nothing is made) and the founder's note never reaches the audit log; a failing git leaves no pod and the run is finished later. Checked by mutation: opening cards that already have a pod, skipping the approved check, and swallowing the audit failure were each caught.
 
 ## Planned evals (not built yet)
 

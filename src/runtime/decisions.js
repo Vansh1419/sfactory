@@ -367,7 +367,19 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
     };
   }
 
-  return { create, resolve, cancel, get, summary, remindDue };
+  /**
+   * The cards the founder approved for one tool, newest first (at most `limit`), as full rows. Read only. A service that applies the founder's answer
+   * to a card of its own kind (the pods service opens a pod) uses it to find answers it missed while the app was closed; it never writes a status.
+   */
+  async function listApproved({ tool, limit = 100 } = {}) {
+    ensureRunning();
+    if (typeof tool !== 'string' || tool.trim() === '') throw invalid('tool must be a tool name');
+    const count = Number.isInteger(limit) && limit >= 1 && limit <= 500 ? limit : 100;
+    const rows = await store.select('decisions', { where: { status: 'approved' }, order: 'resolved_at.desc', limit: 500 });
+    return rows.filter((d) => d.action?.tool === tool).slice(0, count);
+  }
+
+  return { create, resolve, cancel, get, summary, listApproved, remindDue };
 }
 
 /**
