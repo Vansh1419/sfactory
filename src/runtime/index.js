@@ -65,7 +65,7 @@ const AGENT_LIMITS = Object.freeze({ maxSteps: 10, maxTokens: 60_000 });
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, podTemplatesDir, podsRoot, additionalTools = [], mailSend, providers }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, podTemplatesDir, podsRoot, additionalTools = [], mailSend, providers, gitRemoteUrl }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -154,7 +154,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl, podRepo: (podId) => pods.repoFor(podId) }),
     ...createSupabaseTools({ store }),
     // Tools that work inside ONE pod (step 3.2): its own history, memory and client. The pod is the run's, never an argument; a team gets them only by listing them.
-    ...createGitTools({ podFolder: (podId) => pods.folderFor(podId), podRepo: (podId) => pods.repoFor(podId), githubToken: env.GITHUB_TOKEN }),
+    ...createGitTools({ podFolder: (podId) => pods.folderFor(podId), podRepo: (podId) => pods.repoFor(podId), githubToken: env.GITHUB_TOKEN, remoteUrl: gitRemoteUrl }),
     ...createMemoryTools({ store }),
     ...createPodTools({ store }),
     // The Engineering team's own tools (step 3.3): writing a file in the pod's folder, library documentation (CONTEXT7_API_KEY is optional), and a
