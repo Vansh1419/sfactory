@@ -235,6 +235,24 @@ const checks = [
     },
   },
   {
+    id: 'only-the-ticket-tools-and-the-support-team-touch-the-tickets-table',
+    // Customers' tickets are read through tools/tickets.js (which an agent can use only for a ticket a team has taken and which answers a
+    // ticket only with a real reply) and taken, released and escalated by teams/support.js (step 2.4). The store uses the service key,
+    // which bypasses row-level security, so no other module may read or write the tickets table.
+    check() {
+      const allowed = [path.join('src', 'runtime', 'tools', 'tickets.js'), path.join('src', 'runtime', 'teams', 'support.js')];
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => !allowed.includes(rel))
+        .filter((rel) => /['"`]tickets['"`]/.test(stripComments(read(rel))));
+      return offenders.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `uses the tickets table outside ${allowed.join(' and ')}: ${offenders.join(', ')}` };
+    },
+  },
+  {
     id: 'evals-doc-in-sync',
     // .claude/EVALS.md must list every suite with its current case count.
     check() {

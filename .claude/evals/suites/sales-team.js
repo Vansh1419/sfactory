@@ -284,7 +284,7 @@ const cases = [
       const unruled = have.filter((t) => !policy.isBuiltIn(t));
       const asks = have.filter((t) => policy.checkAction({ tool: t, access: config.tools[t], args: {} }).allowed !== true);
       const other = loadToolConfig({ dir: CONFIG_DIR, team: 'support' });
-      const leaked = own.filter((t) => t in other.tools);
+      const leaked = own.filter((t) => t in other.tools && !t.startsWith('email.')); // every team that writes to customers shares the email tools
       const mailers = have.filter((t) => /\.(send|smtp)/i.test(t) || /^(send|smtp)/i.test(t));
       return verdict(missingOwn.length === 0 && unruled.length === 0 && asks.length === 0 && leaked.length === 0 && config.problems.length === 0 && json(mailers) === json(['email.send']), json({ missingOwn, unruled, asks, leaked, problems: config.problems, mailers }));
     },

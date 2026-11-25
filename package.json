@@ -13,6 +13,7 @@
     "check:db": "node scripts/check-db.js",
     "gate:1": "node scripts/gate1.js",
     "lead": "node scripts/lead.js",
+    "ticket": "node scripts/ticket.js",
     "db:migrate": "node scripts/db-migrate.js",
     "fake:supabase": "node scripts/fake-supabase.js",
     "eval": "node .claude/evals/run.js",

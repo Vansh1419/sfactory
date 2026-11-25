@@ -21,6 +21,10 @@
 //     rejected, sending, sent, send_failed, cancelled. Service-role only. The content is fixed when it is written (the
 //     database computes its hash), a message becomes `ready` only with a passing review and, when the founder's approval
 //     is required, an APPROVED decision, and it is `sent` only after `sending`
+//   tickets(id, customer_email, customer_name, subject, body, status, reply_message_id, decision_id, note)
+//     a customer's question or complaint and where it stands (step 2.4): open, in_progress, answered, escalated, closed.
+//     Service-role only. What the customer wrote is fixed when it is written, a ticket is `answered` only with the reply
+//     message it was answered with and `escalated` only with a decision, and its life only moves forward
 //   pod_id is NULL for company-level rows. Pod agents authenticate as role `authenticated`
 //   with a `pod_id` JWT claim; the runtime uses `service_role`, which bypasses RLS.
 
@@ -28,7 +32,7 @@ const { IDS, EMBEDDING_DIMENSIONS, vec, build, applySeed, getEnv, who, withRole,
 
 const TABLES = [
   'tasks', 'agents', 'decisions', 'audit_log', 'memory', 'clients', 'projects',
-  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes', 'outbound_messages',
+  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes', 'outbound_messages', 'tickets',
 ];
 const POD_ROWS = ['tasks', 'decisions', 'memory', 'agent_events', 'audit_log', 'pod_members'];
 
@@ -593,6 +597,93 @@ const cases = [
       const unlabelled = (await db.query("select count(*)::int as n from agents where name not like '[seed]%'")).rows[0].n;
       const ok = once.pods === 1 && once.agents === 1 && once.members === 1 && JSON.stringify(once) === JSON.stringify(twice) && unlabelled === 0;
       return verdict(ok, `after one run ${JSON.stringify(once)}, after two ${JSON.stringify(twice)}, unlabelled agents ${unlabelled}`);
+    },
+  },
+  {
+    id: 'tickets-are-service-only-and-never-visible-to-a-pod',
+    async check(db) {
+      const problems = [];
+      const TICKET = "insert into tickets (customer_email, subject, body) values ('ann@example.com', 'Where is my order?', 'It has not arrived.') returning id";
+      await withRole(db, who.service, async (tx) => {
+        const add = await attempt(tx, TICKET);
+        const seen = await attempt(tx, 'select count(*)::int as n from tickets');
+        if (!add.ok || !seen.ok || seen.rows[0].n < 1) problems.push(`control failed: the runtime cannot write and read a ticket (${add.error ?? seen.error})`);
+      });
+      await withRole(db, who.owner, async (tx) => {
+        await tx.query(TICKET);
+        for (const [name, role, claims] of [['pod', 'authenticated', { pod_id: IDS.podA }], ['no pod claim', 'authenticated', {}], ['anon', 'anon', {}]]) {
+          await tx.query(`set local role ${role}`);
+          await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify(claims)]);
+          const read = await attempt(tx, 'select * from tickets');
+          if (read.ok && read.rows.length > 0) problems.push(`${name} reads tickets`);
+          if ((await attempt(tx, TICKET)).ok) problems.push(`${name} wrote a ticket`);
+          const edit = await attempt(tx, "update tickets set status = 'closed'");
+          if (edit.ok && edit.count > 0) problems.push(`${name} changed a ticket`);
+          await tx.query('reset role');
+        }
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-ticket-starts-open-and-what-the-customer-wrote-is-fixed-and-sensible',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const add = (email, subject, body, extra = '', extraValue = '') => attempt(tx, `insert into tickets (customer_email, subject, body${extra}) values ($1, $2, $3${extraValue}) returning id`, [email, subject, body]);
+        const made = await add('ann@example.com', 'Where is my order?', 'It has not arrived.');
+        if (!made.ok) return problems.push(`control failed: a ticket could not be written (${made.error})`);
+        const id = made.rows[0].id;
+        const row = (await tx.query('select status, reply_message_id, decision_id from tickets where id = $1', [id])).rows[0];
+        if (row.status !== 'open' || row.reply_message_id !== null || row.decision_id !== null) problems.push('a ticket did not start open and empty');
+        for (const [col, value] of [['customer_email', "'b@example.com'"], ['subject', "'Changed'"], ['body', "'Changed'"], ['customer_name', "'Someone'"], ['created_at', "now() - interval '1 day'"]]) {
+          if ((await attempt(tx, `update tickets set ${col} = ${value} where id = $1`, [id])).ok) problems.push(`${col} could be changed after the ticket was written`);
+        }
+        for (const status of ['answered', 'escalated', 'in_progress', 'closed']) {
+          if ((await attempt(tx, `insert into tickets (customer_email, subject, body, status) values ('a@example.com', 'S', 'B', '${status}')`)).ok) problems.push(`a ticket was written as ${status}`);
+        }
+        const bad = [['a@example.com, b@example.com', 'S', 'B'], ['not-an-address', 'S', 'B'], ['a@example.com', 'Hi\r\nBcc: x@y.co', 'B'], ['a@example.com', '', 'B'], ['a@example.com', 'S', ''], ['a@example.com', 'x'.repeat(301), 'B'], ['a@example.com', 'S', 'x'.repeat(20001)]];
+        for (const [email, subject, body] of bad) {
+          if ((await add(email, subject, body)).ok) problems.push(`a bad ticket was written: ${email.slice(0, 20)} / ${subject.slice(0, 10)}`);
+        }
+      });
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'a-ticket-moves-forward-is-answered-only-with-its-reply-escalated-only-with-a-decision-and-is-never-deleted',
+    async check(db) {
+      const problems = [];
+      await withRole(db, who.owner, async (tx) => {
+        const fresh = async () => (await tx.query("insert into tickets (customer_email, subject, body) values ('ann@example.com', 'Help', 'Please help.') returning id")).rows[0].id;
+        const go = (id, status, extra = '', params = []) => attempt(tx, `update tickets set status = '${status}' ${extra} where id = $1`, [id, ...params]);
+        const message = idOf(await tx.query("insert into outbound_messages (team, to_address, subject, body, founder_approval_required) values ('support', 'ann@example.com', 'Re: Help', 'We are on it.', false) returning id"));
+        const message2 = idOf(await tx.query("insert into outbound_messages (team, to_address, subject, body, founder_approval_required) values ('support', 'ann@example.com', 'Re: Help 2', 'We are on it.', false) returning id"));
+        const pending = idOf(await tx.query(decisionRow('pending'), [ACTION, CARD]));
+
+        const a = await fresh();
+        for (const next of ['answered', 'escalated']) if ((await go(a, next)).ok) problems.push(`open went straight to ${next}`);
+        if (!(await go(a, 'in_progress')).ok) problems.push('control failed: open could not go to in_progress');
+        if ((await go(a, 'answered')).ok) problems.push('answered without a reply');
+        if ((await go(a, 'escalated')).ok) problems.push('escalated without a decision');
+        if ((await go(a, 'answered', ', reply_message_id = $2', [message])).ok !== true) problems.push('control failed: in_progress could not become answered with a reply');
+        if ((await attempt(tx, 'update tickets set reply_message_id = $2 where id = $1', [a, message2])).ok) problems.push('the reply of an answered ticket was swapped');
+        for (const next of ['open', 'in_progress', 'escalated']) if ((await go(a, next)).ok) problems.push(`answered went to ${next}`);
+        if (!(await go(a, 'closed')).ok) problems.push('answered could not be closed');
+        for (const next of ['open', 'in_progress', 'answered', 'escalated']) if ((await go(a, next)).ok) problems.push(`closed went to ${next}`);
+        if ((await attempt(tx, 'delete from tickets where id = $1', [a])).ok) problems.push('a ticket was deleted');
+
+        const b = await fresh();
+        await go(b, 'in_progress');
+        if (!(await go(b, 'escalated', ', decision_id = $2', [pending])).ok) problems.push('control failed: in_progress could not become escalated with a decision');
+        if ((await attempt(tx, 'update tickets set decision_id = null where id = $1', [b])).ok) problems.push('the decision of an escalated ticket was removed');
+        for (const next of ['open', 'in_progress', 'answered']) if ((await go(b, next)).ok) problems.push(`escalated went to ${next}`);
+
+        const c = await fresh();
+        await go(c, 'in_progress');
+        if (!(await go(c, 'open')).ok) problems.push('in_progress could not go back to open');
+      });
+      return verdict(problems.length === 0, problems.join('; '));
     },
   },
 ];

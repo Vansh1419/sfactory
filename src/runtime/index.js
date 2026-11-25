@@ -32,8 +32,14 @@ const { createGoogleTools } = require('./tools/google');
 const { loadToolConfig, selectTools } = require('./tools/config');
 const { createAgentFactory } = require('./agents');
 const { createSalesTeam } = require('./teams/marketing-sales');
+const { createTicketTools } = require('./tools/tickets');
+const { createSupportTeam } = require('./teams/support');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// What one team worker may use in one run (a hard stop for a runaway agent). The agent default (8 steps, 20,000 tokens) was sized
+// for tiny test skills: with the real skills a worker's first three steps already use 20,000, and a lead needs five or six steps.
+const AGENT_LIMITS = Object.freeze({ maxSteps: 10, maxTokens: 60_000 });
 
 /**
  * Build the runtime from an environment object.
@@ -50,7 +56,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -75,6 +81,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     providers: buildProviders({ env, fetchImpl }),
     audit: ({ action, ...detail }) => audit.append({ actorType: 'system', action, detail }),
     sleep,
+    // Per task, not overall. A team worker re-sends its skills (about 5,400 tokens) with every step, so a run of a few steps needs
+    // more than the default 50,000; the agent's own cap (below) stops it first.
+    caps: { maxTokens: AGENT_LIMITS.maxTokens + 15_000 },
   });
 
   // The outbound gate (step 2.2): every message to a client is saved, reviewed and, while the founder's approval is required,
@@ -127,6 +136,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     ...createSearchTools({ apiKey: env.TAVILY_API_KEY, fetchImpl }),
     ...createCrmTools({ store }),
     ...createGoogleTools({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, refreshToken: env.GOOGLE_REFRESH_TOKEN, fetchImpl }),
+    // The Support team's ticket tools (step 2.4). A reply is checked through the outbound service, never by reading its table.
+    ...createTicketTools({ store, outbound }),
   ];
   const toolSelection = selectTools({ catalogue, config: loadToolConfig({ dir: toolConfigDir }) });
   // `additionalTools` are tools added in code (the Phase 1 gate test uses a pretend purchase tool). They skip the
@@ -147,8 +158,11 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The agent factory (step 2.1) builds a team from `shared` plus the team's own tools and skills, and the Marketing and Sales
   // team (step 2.3) runs on it. Without a skills folder no team is built (the company charter is required). The team is built
   // the first time a lead is given to it, not at start.
-  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir });
+  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS });
   const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
+  // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
+  // becomes a founder card and marks the ticket escalated.
+  const support = createSupportTeam({ factory: agents, store, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('support.error', {}) });
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
@@ -182,6 +196,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     outbound,
     agents,
     sales,
+    support,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */

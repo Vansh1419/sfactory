@@ -29,14 +29,14 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 
 | Suite | Grades | Cases | Threshold | Plan step | Today |
 |---|---|---|---|---|---|
-| `invariants` | The repo itself: architecture, security settings, docs in sync | 13 | 100% | 0.4 | pass |
+| `invariants` | The repo itself: architecture, security settings, docs in sync | 15 | 100% | 0.4 | pass |
 | `policy-check` | `src/runtime/policy.js` | 44 | 100% | 1.4 | pass |
 | `decision-cards` | `src/runtime/cards.js` | 52 | 100% | 1.5 | pass |
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 72 | 100% | 1.8 | pass |
-| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 30 | 100% | 1.1 | pass |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 33 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
 | `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 33 | 100% | 1.7d | pass |
@@ -61,6 +61,8 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `crm-tools` | `src/runtime/tools/crm.js` (find and save leads in the `clients` table), on a real Postgres | 10 | 100% | 2.3 (CRM) | pass |
 | `google-tools` | `src/runtime/tools/google.js` (read Gmail, make drafts, list and save Drive files; never sends) | 11 | 100% | 2.3 (Gmail and Drive) | pass |
 | `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
+| `ticket-tools` | `src/runtime/tools/tickets.js` (read a ticket a team has taken, record that it was answered), on a real Postgres | 9 | 100% | 2.4 (tickets) | pass |
+| `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 11 | 100% | 2.4 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -74,7 +76,7 @@ Update the "Today" column when a suite's status changes.
 
 Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check function in the suite file. Runs against the repo today.
 
-**Cases:** 14
+**Cases:** 15
 
 | Case | Rule it protects |
 |---|---|
@@ -512,7 +514,9 @@ Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (a
 
 Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
 
-**Cases:** 30
+**Cases:** 33
+
+Three of these cases (added Nov 25, 2026 for step 2.4) cover the `tickets` table: it is service-only and invisible to a pod; a ticket starts open, what the customer wrote cannot be changed, and a bad address, a line break in the subject or an oversize text is refused; a ticket only moves forward (open, in progress, answered or escalated, closed), is `answered` only with its reply message and `escalated` only with a decision, those links cannot be swapped or removed, and a ticket is never deleted.
 
 How it works: the migrations are applied, in filename order, to a real Postgres running inside the test (PGlite, which is PostgreSQL 18, with pgvector). It is dressed like Supabase: the `anon`, `authenticated` and `service_role` roles, an `auth.jwt()` that reads the request's claims, and Supabase's default grants (which the migrations must take back). A fixture creates two pods with rows in every table. Each case then acts as someone specific (a pod agent with a `pod_id` claim, no claim, `anon`, the runtime's `service_role`, or the table owner) and tries things, always inside a transaction that is rolled back. Attack cases include a positive control (the same action on the pod's own data must succeed) so a case cannot pass just because everything is blocked. The contract (tables and columns the fixture inserts into) is in the header of the suite file.
 
@@ -619,6 +623,22 @@ Suite: `.claude/evals/suites/sales-team.js`. The step 2.3 "done when", on a real
 **Cases:** 10
 
 Covers: **a lead goes from research to a saved lead (status `lead`) to a drafted proposal to a waiting founder card, the task is done, and nothing is sent to the client or from Gmail**; every tool run is recorded as the agent that did it; a proposal the review fails never gets a card and only the rewritten one does; a crucial action (a signature request) stops the agent, becomes a pending decision in the right category, and the task is blocked; if that card cannot be made the result says so; a lead with a bad detail runs nothing and asks no model; a team without the charter is not built; the team's tools are exactly the files list, each with a built-in rule, none that needs the founder, and `email.send` is the only one that sends; its skills are the shared ones plus its own five and no other team gets them; the worker's prompt lists the team's tools and skills and fences what it found as data. Checked by mutation on Nov 25, 2026: treating a failed review as a pass was caught.
+
+### ticket-tools
+
+Suite: `.claude/evals/suites/ticket-tools.js`. Code under test: `src/runtime/tools/tickets.js`, on a real Postgres with the migrations (the `tickets` table and its rules). The outbound service is a stand-in whose `get` gives the view each case chooses; the message rows are real (a ticket's reply is a foreign key).
+
+**Cases:** 9
+
+Why it exists: the store uses the service key, which bypasses row-level security, so these tools are the only protection for customers' tickets. Covers: both tools with the right tags and policy rules, and none without a store and the outbound service; a ticket can be read only while a team has it in progress (before and after, and for an unknown id, it says there is no such ticket); an answered ticket can no longer be read; a long customer message is cut, and a bad or injected id, a missing field or an extra argument never reaches the database; a ticket is answered with a reply that is awaiting the founder, ready or sent (the address matched without regard to case) and the link is recorded; **a reply for another customer, from another team, a draft, a failed review, a rejected, cancelled or failed message, or a message that does not exist never answers a ticket**; a ticket that is not in progress cannot be answered and an answered one is not answered twice; the reply is checked through the outbound service and the tool never reads the messages table; a database failure is one plain sentence. Checked by mutation on Nov 25, 2026: removing the customer-address check was caught.
+
+### support-team
+
+Suite: `.claude/evals/suites/support-team.js`. The step 2.4 "done when", on a real Postgres with the migrations. Real: the agent factory and team framework, the repository's tool configuration and skills folders, the policy, the tool loader, the ticket tools, the outbound gate and the decisions service. Scripted: the model, the review agent's verdicts and the card writer.
+
+**Cases:** 11
+
+Covers: **a routine ticket is answered with a reply that went through the gate (a message from the support team awaiting the founder, with its card) and recorded, and nothing is sent**; **a refund request becomes a pending founder card in the spend category with the customer's message under "Show details", the ticket is marked escalated with that decision, and no message is written to the customer**; a discount (launch or pricing), a complaint and a legal question (legal or public) do the same; the customer's words reach the agent only inside the fenced result of `tickets.get`, never in the task; two runs started together on one ticket answer it once; a run that does not answer, a lead that rejects work that did not answer, and a model that cannot be reached all put the ticket back to open, while a rejection after the reply was already made leaves it answered (not reopened, so the customer is not emailed twice); if the card cannot be made the ticket goes back to open and the result says so; a bad or unknown id and a team without the charter run nothing and ask no model; `workNext` takes the oldest open ticket and says none when there is none; the team's tools are exactly the files list, with `refund.issue`, `discount.grant`, `complaint.escalate` and `legal.escalate` having no tool at all, only an always-ask rule in the right category; its skills are the shared ones plus its own four, and the sales skills are not in them. Checked by mutation on Nov 25, 2026: filing the card without marking the ticket escalated was caught. Found while writing it: the lead model writes the worker's instructions, so the task now tells the lead to put the ticket id in them.
 
 ## Planned evals (not built yet)
 

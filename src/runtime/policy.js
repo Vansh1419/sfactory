@@ -90,6 +90,15 @@ const RULES = new Map([
   ['gmail.create_draft', { access: 'write' }],
   ['drive.list_files', { access: 'read' }],
   ['drive.save_file', { access: 'write' }],
+  // The Support team (step 2.4). Reading a ticket it was given and recording that it was answered are routine. The four below have
+  // NO implementation: they exist only so that an agent that reaches for one is stopped and the founder gets a card. A refund is
+  // spending, a discount is a price change, and a complaint or a legal or contract question is the founder's to answer.
+  ['tickets.get', { access: 'read' }],
+  ['tickets.mark_answered', { access: 'write' }],
+  ['refund.issue', { ask: CATEGORIES.SPEND }],
+  ['discount.grant', { ask: CATEGORIES.LAUNCH }],
+  ['complaint.escalate', { ask: CATEGORIES.LEGAL }],
+  ['legal.escalate', { ask: CATEGORIES.LEGAL }],
 ]);
 
 /** Only an exact "preview" target is routine. A missing or odd target is treated as production. */

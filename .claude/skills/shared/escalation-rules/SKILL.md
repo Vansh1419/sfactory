@@ -21,16 +21,19 @@ Every one of these asks first, whatever the amount or size.
 
 **Spending money**
 - `razorpay.create_payout`, `stripe.create_charge`, `brevo.upgrade_plan`, `namecheap.purchase_domain`, `openrouter.add_credits`
+- `refund.issue`: giving a customer their money back is spending. Support uses it to ask the founder, and never refunds on its own.
 
 **Hiring, firing or signing**
 - `freelancer.hire`, `docusign.send_for_signature`, `hr.terminate_contract`, `vendor.sign_agreement`
 
 **A launch or a price change**
 - `stripe.update_price`, `github.merge_pull_request`
+- `discount.grant`: a discount, a lower price or a free extra is a price change. Support uses it to ask the founder.
 - `vercel.deploy` asks too, **unless the target is exactly "preview"**. A missing or odd target counts as production.
 
 **A legal document or a public statement**
 - `social.publish_post`, `website.publish_page`, `legal.issue_document`, `press.send_statement`
+- `complaint.escalate` and `legal.escalate`: an unhappy customer, or a question about a contract, terms, privacy or the law, is the founder's to answer. Support uses them to ask the founder, and never replies to that customer itself.
 - `outbound.approve_send` is the founder's approval of an email to a client. You never call it. Write the email with `email.submit` (it saves and reviews it, and never sends) and send it with `email.send`. While approval is required the founder is asked for you, and the email does not go out until they say yes. Never send mail any other way.
 
 ## Alone

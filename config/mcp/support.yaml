@@ -1,0 +1,15 @@
+# The Support team's own tools, on top of shared.yaml (PLAN.md step 2.4). Read by src/runtime/tools/config.js and graded by the
+# `support-team` eval. Same format as shared.yaml: tool name: read | write, and the tag must match the tag the tool declares itself.
+# Listing a tool does NOT make it allowed: the policy check still decides.
+#
+# A reply to a customer goes through email.submit (a review, then the founder's card while that is required) and email.send (sends
+# only a message that passed). Refunds, discounts, complaints and legal questions have no tool at all: reaching for one stops the agent
+# and files a card for the founder (see the four ask-rules in src/runtime/policy.js).
+tools:
+  # The ticket the team was given, and recording that it was answered.
+  tickets.get: read
+  tickets.mark_answered: write
+
+  # A reply to the customer: reviewed first, then the founder's card, then sent.
+  email.submit: write
+  email.send: write
