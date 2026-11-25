@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'files.beginEdit', 'files.endEdit', 'files.history', 'files.pods', 'files.read', 'files.save', 'files.tree', 'files.upload', 'goals.list', 'runtime.status', 'teams.list', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.events', 'agents.list', 'agents.message', 'agents.pause', 'agents.reassign', 'brief.get', 'decisions.list', 'decisions.resolve', 'files.beginEdit', 'files.endEdit', 'files.history', 'files.pods', 'files.read', 'files.save', 'files.tree', 'files.upload', 'goals.list', 'runtime.status', 'teams.list', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
     },
   },
   {
@@ -517,13 +517,13 @@ const cases = [
     },
   },
   {
-    id: 'pause-refuses-until-it-is-built-and-changes-nothing',
+    id: 'pause-needs-the-agent-service-and-changes-nothing-without-it',
     async check() {
       const { store, runtime } = setupWithCommands();
       const pause = await runtime.invoke('agents.pause', { agentId: UUID, paused: true });
       const bad = await runtime.invoke('agents.pause', { agentId: 'nope', paused: true });
       const writes = store.log.filter((e) => e[0] === 'update' || (e[0] === 'insert' && e[1] !== 'audit_log'));
-      return verdict(pause.error?.code === 'not_implemented' && bad.error?.code === 'invalid_args' && writes.length === 0, `pause ${pause.error?.code}, bad ${bad.error?.code}, writes ${json(writes)}`);
+      return verdict(pause.error?.code === 'not_available' && bad.error?.code === 'invalid_args' && writes.length === 0, `pause ${pause.error?.code}, bad ${bad.error?.code}, writes ${json(writes)}`);
     },
   },
   {

@@ -43,9 +43,10 @@ const WORKER_STOPPED = Object.freeze({
   bad_answers: 'The worker could not produce a usable answer.',
   audit_failed: 'A step could not be recorded, so the worker stopped.',
   bad_task: 'The subtask was not usable.',
+  paused: 'The agent was paused by the founder, so it stopped.',
 });
 
-function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange } = {}) {
+function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange, events } = {}) {
   // Tells the app that a task or an agent changed (the Teams page then refreshes). It is a hint only: if it throws, nothing else changes.
   const changed = () => {
     try {
@@ -61,7 +62,15 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
     if (!agent?.id) return;
     try {
       const rows = await store.update('agents', { id: agent.id, status: from }, { status: to });
-      if (Array.isArray(rows) && rows.length > 0) changed();
+      if (Array.isArray(rows) && rows.length > 0) {
+        changed();
+        // The live feed (step 3.7): when an agent starts and stops working. A display hint that never stops a task.
+        try {
+          await events?.record({ agentId: agent.id, kind: 'status_change', summary: to === 'working' ? `${agent.name} started working.` : `${agent.name} is ${to}.` });
+        } catch {
+          // The feed missing a line is not a reason to stop work.
+        }
+      }
     } catch {
       // The Teams page showing a stale status is not a reason to stop work.
     }
@@ -157,7 +166,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
         for (let attempt = 0; ; attempt += 1) {
           if (current !== 'in_progress') await setStatus('in_progress', { assigned_agent_id: worker.id, ...(outputs.length === 0 && attempt === 0 ? { started_at: new Date().toISOString() } : {}) }, { worker: worker.name });
 
-          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}), ...(podId ? { podId: podId.toLowerCase() } : {}) }));
+          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, rowId: taskId, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}), ...(podId ? { podId: podId.toLowerCase() } : {}) }));
           if (result.status === 'needs_founder') return await block('This needs the founder to decide first, so the task is waiting.', { status: 'needs_founder', request: result.request });
           if (result.status !== 'done') return await block(WORKER_STOPPED[result.reason] ?? 'The worker could not finish.');
 

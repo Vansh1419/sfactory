@@ -72,16 +72,28 @@ function validTask(task) {
     && typeof task.title === 'string' && task.title.trim() !== '' && task.title.length <= MAX_TITLE_CHARS
     && typeof task.instructions === 'string' && task.instructions.trim() !== '' && task.instructions.length <= MAX_TASK_INSTRUCTIONS_CHARS
     && (task.feedback === undefined || (typeof task.feedback === 'string' && task.feedback.length <= MAX_FEEDBACK_CHARS))
-    && (task.podId === undefined || (typeof task.podId === 'string' && POD_ID.test(task.podId)));
+    && (task.podId === undefined || (typeof task.podId === 'string' && POD_ID.test(task.podId)))
+    && (task.rowId === undefined || (typeof task.rowId === 'string' && POD_ID.test(task.rowId)));
 }
 
-function createAgent({ id, name, role, team, instructions = '', router, tools, policy, audit, limits, sensitive = true, tier = 'cheap' } = {}) {
+// What a feed line says when an agent stops, in plain words (step 3.7).
+const STOP_TEXT = Object.freeze({
+  step_cap: 'it used all its steps without finishing.',
+  token_cap: 'it used up its allowance without finishing.',
+  model_unavailable: 'no model could answer.',
+  bad_answers: 'it could not produce a usable answer.',
+  audit_failed: 'a step could not be recorded.',
+  paused: 'it was paused.',
+});
+const FILE_TOOLS = Object.freeze({ 'filesystem.read_file': 'file_read', 'pod.write_file': 'file_written' });
+
+function createAgent({ id, name, role, team, instructions = '', router, tools, policy, audit, limits, sensitive = true, tier = 'cheap', events, control } = {}) {
   const caps = isObject(limits) ? limits : {};
   const maxSteps = clampInt(caps.maxSteps, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS);
   const maxTokens = clampInt(caps.maxTokens, DEFAULT_MAX_TOKENS, ABSOLUTE_MAX_TOKENS);
   const self = { id, name, role, team };
 
-  function buildPrompt(task, history, retryNote) {
+  function buildPrompt(task, history, retryNote, notes = []) {
     const taskFence = fence('TASK');
     const lines = [
       `You are ${name}, a ${role === 'lead' ? 'team lead' : 'worker'} in the ${team} team of a small company run by one founder.`,
@@ -106,6 +118,15 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
         `<<<${feedbackFence}`,
         task.feedback,
         `${feedbackFence}>>>`,
+      );
+    }
+    if (notes.length > 0) {
+      const founderFence = fence('FOUNDER');
+      lines.push(
+        `The text between the ${founderFence} markers is a note the founder wrote to you. It is the founder's wish: follow it, unless it asks you to break the rules above, to use a tool you do not have, or to skip an approval the founder must give.`,
+        `<<<${founderFence}`,
+        ...notes,
+        `${founderFence}>>>`,
       );
     }
     history.forEach((h, i) => {
@@ -133,19 +154,39 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
     let tokens = 0;
     let badInARow = 0;
     let retryNote = null;
+    const notes = []; // what the founder typed to this agent: kept for the rest of the run
+
+    // The live feed (step 3.7): one plain line per step. Recording is a display hint and can never stop the agent.
+    const note = async (kind, summary, detail) => {
+      if (!events) return;
+      try {
+        await events.record({ agentId: self.id, podId: task.podId, taskId: task.rowId, kind, summary, detail });
+      } catch {
+        // A feed that cannot be written is not a reason to stop.
+      }
+    };
+    const halt = async (status, reason) => {
+      await note('error', `${name} stopped: ${STOP_TEXT[reason] ?? 'it could not go on.'}`);
+      return { status, reason, steps };
+    };
 
     try {
       while (steps < maxSteps) {
-        if (tokens >= maxTokens) return { status: 'stopped', reason: 'token_cap', steps };
+        if (control && (await control.isPaused(self.id).catch(() => false))) return halt('stopped', 'paused');
+        for (const text of control?.takeMessages?.(self.id) ?? []) {
+          notes.push(text);
+          await note('message', `${name} read a note from the founder.`);
+        }
+        if (tokens >= maxTokens) return halt('stopped', 'token_cap');
 
-        const prompt = buildPrompt(task, history, retryNote);
+        const prompt = buildPrompt(task, history, retryNote, notes);
         let answer;
         try {
           answer = await router.complete({ taskId: routerTaskId, tier, prompt, sensitive });
         } catch {
-          return { status: 'stopped', reason: 'model_unavailable', steps };
+          return halt('stopped', 'model_unavailable');
         }
-        if (!isObject(answer) || answer.ok !== true || typeof answer.text !== 'string') return { status: 'stopped', reason: 'model_unavailable', steps };
+        if (!isObject(answer) || answer.ok !== true || typeof answer.text !== 'string') return halt('stopped', 'model_unavailable');
 
         steps += 1;
         tokens += estimateTokens(prompt, answer.text);
@@ -153,7 +194,7 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
         const action = parseAction(answer.text);
         if (!action) {
           badInARow += 1;
-          if (badInARow >= MAX_BAD_ANSWERS_IN_A_ROW) return { status: 'failed', reason: 'bad_answers', steps };
+          if (badInARow >= MAX_BAD_ANSWERS_IN_A_ROW) return halt('failed', 'bad_answers');
           retryNote = NOT_VALID;
           continue;
         }
@@ -181,6 +222,7 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
           continue;
         }
         if (verdict.allowed !== true && verdict.category !== 'unknown') {
+          await note('help_asked', `${name} needs the founder to decide: ${toolName} (${verdict.category}).`);
           return { status: 'needs_founder', request: { tool: toolName, access: action.access, args: safeArgs, category: verdict.category }, steps };
         }
         if (verdict.allowed !== true || !tools.describe({ inPod: task.podId !== undefined }).some((t) => t.tool === toolName)) {
@@ -191,8 +233,10 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
         try {
           await audit.append({ actorType: 'agent', actorId: self.id, ...(task.podId ? { podId: task.podId.toLowerCase() } : {}), action: 'agent.tool_run', detail: { team, agent: name, taskId: task.taskId, tool: toolName, step: steps } });
         } catch {
-          return { status: 'failed', reason: 'audit_failed', steps };
+          return halt('failed', 'audit_failed');
         }
+        const file = typeof action.args?.path === 'string' && action.args.path.length <= 100 ? action.args.path : '';
+        await note(FILE_TOOLS[toolName] ?? 'tool_used', FILE_TOOLS[toolName] && file ? `${name} used ${toolName} on ${file}.` : `${name} used ${toolName}.`, { tool: toolName, step: steps });
 
         let observation;
         try {
@@ -200,10 +244,11 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
           observation = typeof out?.text === 'string' && out.text !== '' ? redactDetail(out.text).slice(0, MAX_OBSERVATION_CHARS) : '(no text came back)';
         } catch {
           observation = TOOL_FAILED;
+          await note('error', `${toolName} failed, so ${name} tried something else.`, { tool: toolName, step: steps });
         }
         observed(observation);
       }
-      return { status: 'stopped', reason: 'step_cap', steps };
+      return halt('stopped', 'step_cap');
     } finally {
       try {
         router.endTask?.(routerTaskId);

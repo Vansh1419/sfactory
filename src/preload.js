@@ -40,7 +40,11 @@ contextBridge.exposeInMainWorld('api', {
     upload: (args) => invoke('files.upload', args),
   },
   agents: {
+    list: () => invoke('agents.list'),
+    events: (args) => invoke('agents.events', args),
     pause: (args) => invoke('agents.pause', args),
+    message: (args) => invoke('agents.message', args),
+    reassign: (args) => invoke('agents.reassign', args),
   },
   /** Subscribe to runtime events. Returns a function that unsubscribes. */
   onEvent: (listener) => {

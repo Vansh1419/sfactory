@@ -8,6 +8,7 @@
 const { CommandError } = require('./runtime');
 const { DecisionError } = require('./decisions');
 const { PodFilesError } = require('./pods/files');
+const { AgentControlError } = require('./agents/control');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 'cancelled'];
@@ -34,7 +35,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null, agentControl = null, agentEvents = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -207,18 +208,41 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
     (a) => podFiles.save({ podId: a.podId, path: a.path, content: a.content, ...(a.message === undefined ? {} : { message: a.message }) }), sizeOnly);
   files('files.upload', ['podId', 'path', 'content'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a), (a) => podFiles.upload({ podId: a.podId, path: a.path, content: a.content }), sizeOnly);
 
-  runtime.register('agents.pause', {
-    validate(args) {
-      const extra = unknownKey(args, ['agentId', 'paused']);
-      if (extra) return extra;
-      if (typeof args.agentId !== 'string' || !UUID.test(args.agentId)) return 'agentId must be an agent id';
-      if (typeof args.paused !== 'boolean') return 'paused must be true or false';
-      return null;
-    },
-    handler: async () => {
-      throw new CommandError('not_implemented', 'Pausing agents is built in a later plan step. Nothing was changed.');
+  // The agents panel and live feed (step 3.7). `agents.list` and `agents.events` read; `agents.pause`, `agents.message` and `agents.reassign` are the
+  // founder's controls (each audited first by the service). The founder's note is free text: the audit entry records its length, not what it said.
+  // The live feed itself arrives as the runtime event `agent.event`; `agents.events` is how the panel loads what happened before it was opened.
+  const agentsDo = (name, keys, check, run, auditArgs) => runtime.register(name, {
+    ...(auditArgs ? { auditArgs } : {}),
+    validate: (args) => unknownKey(args, keys) ?? check(args),
+    handler: async (args) => {
+      if (!agentControl) throw new CommandError('not_available', 'The agents are not available right now.');
+      try {
+        return await run(args);
+      } catch (err) {
+        if (err instanceof AgentControlError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
     },
   });
+  const agentArg = (a) => (typeof a.agentId === 'string' && UUID.test(a.agentId) ? null : 'agentId must be an agent id');
+  agentsDo('agents.list', [], () => null, () => agentControl.list());
+  runtime.register('agents.events', {
+    validate(args) {
+      const extra = unknownKey(args, ['agentId', 'limit']);
+      if (extra) return extra;
+      if (agentArg(args)) return agentArg(args);
+      if (args.limit !== undefined && !(Number.isInteger(args.limit) && args.limit >= 1 && args.limit <= MAX_LIMIT)) return `limit must be a whole number from 1 to ${MAX_LIMIT}`;
+      return null;
+    },
+    handler: async (args) => {
+      if (!agentEvents) throw new CommandError('not_available', 'The agents are not available right now.');
+      return { events: await agentEvents.list({ agentId: args.agentId, ...(args.limit === undefined ? {} : { limit: args.limit }) }) };
+    },
+  });
+  agentsDo('agents.pause', ['agentId', 'paused'], (a) => agentArg(a) ?? (typeof a.paused === 'boolean' ? null : 'paused must be true or false'), (a) => agentControl.pause({ agentId: a.agentId, paused: a.paused }));
+  agentsDo('agents.message', ['agentId', 'text'], (a) => agentArg(a) ?? (typeof a.text === 'string' && a.text.length <= 2000 ? null : 'text must be text of at most 2000 characters'),
+    (a) => agentControl.message({ agentId: a.agentId, text: a.text }), (a) => ({ agentId: a.agentId, chars: typeof a.text === 'string' ? a.text.length : 0 }));
+  agentsDo('agents.reassign', ['taskId', 'agentId'], (a) => (typeof a.taskId === 'string' && UUID.test(a.taskId) ? null : 'taskId must be a task id') ?? agentArg(a), (a) => agentControl.reassign({ taskId: a.taskId, agentId: a.agentId }));
 }
 
 module.exports = { registerCommands };

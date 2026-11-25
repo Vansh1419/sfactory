@@ -49,6 +49,8 @@ const { createTeamJobs } = require('./teams/jobs');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
 const { createPodFiles } = require('./pods/files');
+const { createAgentEvents } = require('./agents/events');
+const { createAgentControl } = require('./agents/control');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -71,7 +73,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -191,7 +193,11 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The agent factory (step 2.1) builds a team from `shared` plus the team's own tools and skills, and the Marketing and Sales
   // team (step 2.3) runs on it. Without a skills folder no team is built (the company charter is required). The team is built
   // the first time a lead is given to it, not at start.
-  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS, onChange: () => runtime.emit('tasks.changed', {}) });
+  // The agents panel and live feed (step 3.7): every step an agent takes is saved to `agent_events` and announced as `agent.event`; the founder can pause an
+  // agent, type it a note and move a waiting task. Trusted code only: an agent is never handed the control.
+  const agentEvents = createAgentEvents({ store, emit });
+  const agentControl = createAgentControl({ store, audit, events: agentEvents, emit, isBlocked });
+  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS, onChange: () => runtime.emit('tasks.changed', {}), events: agentEvents, control: agentControl });
   const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
   // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
   // becomes a founder card and marks the ticket escalated.
@@ -212,7 +218,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
   const jobs = createTeamJobs({ sales, support, emit, onError: () => runtime.emit('teams.error', {}) });
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods, agentControl, agentEvents });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -254,6 +260,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     specialists,
     pods,
     podFiles,
+    agentControl,
+    agentEvents,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
