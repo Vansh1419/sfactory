@@ -26,7 +26,12 @@ const { createReviewer } = require('./outbound/review');
 const { createOutboundTools } = require('./outbound/tools');
 const { parseApprovalUntil } = require('./outbound/settings');
 const { createSupabaseTools } = require('./tools/supabase');
+const { createSearchTools } = require('./tools/search');
+const { createCrmTools } = require('./tools/crm');
+const { createGoogleTools } = require('./tools/google');
 const { loadToolConfig, selectTools } = require('./tools/config');
+const { createAgentFactory } = require('./agents');
+const { createSalesTeam } = require('./teams/marketing-sales');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -37,7 +42,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * it refuses every action (with the reason) and only answers runtime.status, so the
  * UI can tell the founder what to fix instead of crashing.
  */
-function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, additionalTools = [], mailSend }) {
+function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, skillsDir, additionalTools = [], mailSend }) {
   const loaded = loadConfig(env);
 
   if (!loaded.ok) {
@@ -45,7 +50,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -108,18 +113,22 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
   const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot });
   // Which of the available tools are used is decided by config/mcp/shared.yaml (an allow-list with a read/write tag
   // check that fails closed: without the file there are no tools). The policy rule is still required by the loader.
-  const toolSelection = selectTools({
-    catalogue: [
-      ...BUILTIN_TOOLS,
-      ...filesystemTools,
-      ...createFetchTools(),
-      // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
-      ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
-      ...createSupabaseTools({ store }),
-      ...createOutboundTools({ outbound }),
-    ],
-    config: loadToolConfig({ dir: toolConfigDir }),
-  });
+  // Every tool that exists. A team gets only the ones its configuration lists (shared.yaml plus <team>.yaml).
+  const catalogue = [
+    ...BUILTIN_TOOLS,
+    ...filesystemTools,
+    ...createFetchTools(),
+    // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
+    ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
+    ...createSupabaseTools({ store }),
+    ...createOutboundTools({ outbound }),
+    // The Marketing and Sales team's tools (step 2.3). Search needs TAVILY_API_KEY; Gmail and Drive need all three GOOGLE_*
+    // settings (and only read mail, make drafts and save files: nothing sends mail); the lead list is our own `clients` table.
+    ...createSearchTools({ apiKey: env.TAVILY_API_KEY, fetchImpl }),
+    ...createCrmTools({ store }),
+    ...createGoogleTools({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, refreshToken: env.GOOGLE_REFRESH_TOKEN, fetchImpl }),
+  ];
+  const toolSelection = selectTools({ catalogue, config: loadToolConfig({ dir: toolConfigDir }) });
   // `additionalTools` are tools added in code (the Phase 1 gate test uses a pretend purchase tool). They skip the
   // configuration allow-list but NOT the policy: the loader still refuses one with no policy rule.
   const toolLoader = createToolLoader({ tools: [...toolSelection.tools, ...(Array.isArray(additionalTools) ? additionalTools : [])], hasRule });
@@ -134,6 +143,12 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     runTool: (request) => toolLoader.run(request),
     onError: () => runtime.emit('orchestrator.error', {}),
   });
+
+  // The agent factory (step 2.1) builds a team from `shared` plus the team's own tools and skills, and the Marketing and Sales
+  // team (step 2.3) runs on it. Without a skills folder no team is built (the company charter is required). The team is built
+  // the first time a lead is given to it, not at start.
+  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir });
+  const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
@@ -165,6 +180,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, add
     telegram,
     orchestrator,
     outbound,
+    agents,
+    sales,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */

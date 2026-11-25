@@ -57,6 +57,10 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 21 | 100% | 2.1 | pass |
 | `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
 | `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 20 | 100% | 2.2 | pass |
+| `search-tool` | `src/runtime/tools/search.js` (web search through Tavily) | 8 | 100% | 2.3 (search) | pass |
+| `crm-tools` | `src/runtime/tools/crm.js` (find and save leads in the `clients` table), on a real Postgres | 10 | 100% | 2.3 (CRM) | pass |
+| `google-tools` | `src/runtime/tools/google.js` (read Gmail, make drafts, list and save Drive files; never sends) | 11 | 100% | 2.3 (Gmail and Drive) | pass |
+| `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 30 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
@@ -583,6 +587,38 @@ Why it exists: on Nov 23, 2026 the founder asked that the policy table be editab
 Checked by mutation on Nov 23, 2026: 28 realistic mistakes were introduced into `policy-tools.js` and the merge in `policy.js` one at a time (a routine tool going live without a confirm, a built-in tool that can be added, confirm not guarded by the status, the audit entry optional, any channel allowed, a pasted secret stored, the note in the audit log or an event, names not normalised, a failed reload keeping stale rules, the policy not reloaded after a change, a blocked runtime still adding tools, unknown options accepted, cancel removing an active rule, a lost race not called a conflict, the founder's rule beating a built-in one, rows for built-in tools or merely proposed rules trusted, rubbish accepted as the rules, the unknown category allowed, a second grant site in `policy.js`). 25 were caught on the first run. Of the three misses, two were real gaps in the tests and are fixed: the lookup's own "built-in first" guarantee was hidden behind `customRulesFrom` dropping those rows (now tested on its own), and a fake rules object that would have been refused for the wrong reason (now one that would be allowed if trusted). The third is an **equivalent mutant**: the lookup of the founder's rules is never called for a built-in tool because the built-in lookup short-circuits first, so a failure there cannot change a built-in answer.
 
 Fixes checked by mutation on Nov 23, 2026 (the reload-reporting change in `policy-tools.js`, the `auditArgs` option in `runtime.js` and `commands.js`, and the `.env.example` rule): 19 realistic mistakes were introduced one at a time (a failed reload thrown as an error again, `inEffect` always true or always false, a failed reload not remembered or never cleared, the degraded event not sent, a repeated request ignoring that the policy is behind, stale rules kept after a failed reload, the reload not reported by confirm or remove, a failed write swallowed, the audit chooser ignored, a broken chooser recording everything, the chooser changing what the handler receives, a non-function chooser accepted, the dashboard answer logging the note again, the access-token line deleted, a setting renamed in the example). 18 were caught on the first run; the miss (a chooser that is not a function accepted at registration) is now a check in the `runtime-core` case and is caught.
+
+### search-tool
+
+Suite: `.claude/evals/suites/search-tool.js`. Code under test: `src/runtime/tools/search.js` (a network stand-in that records every request).
+
+**Cases:** 8
+
+Covers: no key means no tool; the tool is read-only with a built-in policy rule (a write access is refused); one POST to Tavily's fixed address with the key in one header (never in an address), a body holding only the fixed settings (a query cannot add its own) and no redirect followed; results are one plain line each (markup removed, only web addresses kept); an empty or odd reply says "No results."; a bad argument (empty, too long, a control character, a bad count, an extra argument such as an address) never causes a request; the count defaults to five and the text is cut to a limit; a failure is one plain sentence that never shows the key or the service's own text. Checked by mutation on Nov 25, 2026: letting the request follow redirects, asking Tavily for page text, and moving the key into the address were each caught (Nov 25, 2026, after the switch from Brave).
+
+### crm-tools
+
+Suite: `.claude/evals/suites/crm-tools.js`. Code under test: `src/runtime/tools/crm.js`, on a real Postgres with the migrations (the `clients` table).
+
+**Cases:** 10
+
+Why it exists: the store uses the service key, which bypasses row-level security, so these tools are the only protection for client records. Covers: both tools with the right tags and policy rules, and none without a usable store; a new lead is saved with status `lead` and a lower-case email, then found; the same email saved again updates that lead and never adds a row; a lead without an email is matched by its exact name; **a client who is active or past is never shown, changed or duplicated**; no argument can set a status, an id or a date; bad arguments change nothing; a secret in the notes is removed; a name search ignores case and shows at most twenty; a database failure is one plain sentence. Checked by mutation on Nov 25, 2026: removing the lead-only filter was caught.
+
+### google-tools
+
+Suite: `.claude/evals/suites/google-tools.js`. Code under test: `src/runtime/tools/google.js` (a Google stand-in that records every request).
+
+**Cases:** 11
+
+Why it exists: the founder chose "drafts only, no send yet" for Gmail. Covers: four tools with the right tags and policy rules, and none unless all three settings are given; the access token comes from the refresh token, is kept until a minute before it ends, then fetched again; every request goes to one of Google's three addresses with the token in one header and no redirect; Gmail search lists then reads each message's headers; **a draft goes into the Drafts folder, is built from the checked message and is never sent**; a draft the outbound check would refuse (two addresses, a key, a placeholder, a line break in the subject) is refused with no request; **the source contains no send call at all**; Drive search escapes quotes; Drive save is one private multipart upload with a plain file name; a bad name, text or search causes no request; a failure is one plain sentence that shows no token and no text from Google. Checked by mutation on Nov 25, 2026: removing the draft's message check was caught.
+
+### sales-team
+
+Suite: `.claude/evals/suites/sales-team.js`. The step 2.3 "done when", on a real Postgres with the migrations. Real: the agent factory and team framework, the repository's tool configuration and skills folders, the policy, the tool loader, the CRM tools, the outbound gate and the decisions service. Scripted: the model, the review agent's verdicts, the card writer, and Tavily and Google.
+
+**Cases:** 10
+
+Covers: **a lead goes from research to a saved lead (status `lead`) to a drafted proposal to a waiting founder card, the task is done, and nothing is sent to the client or from Gmail**; every tool run is recorded as the agent that did it; a proposal the review fails never gets a card and only the rewritten one does; a crucial action (a signature request) stops the agent, becomes a pending decision in the right category, and the task is blocked; if that card cannot be made the result says so; a lead with a bad detail runs nothing and asks no model; a team without the charter is not built; the team's tools are exactly the files list, each with a built-in rule, none that needs the founder, and `email.send` is the only one that sends; its skills are the shared ones plus its own five and no other team gets them; the worker's prompt lists the team's tools and skills and fences what it found as data. Checked by mutation on Nov 25, 2026: treating a failed review as a pass was caught.
 
 ## Planned evals (not built yet)
 

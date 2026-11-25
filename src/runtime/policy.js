@@ -81,6 +81,15 @@ const RULES = new Map([
   // the message and has it reviewed, and `email.send` sends only a stored message that is ready. No other tool may send mail.
   ['email.submit', { access: 'write' }],
   ['email.send', { access: 'write' }],
+  // The Marketing and Sales team's tools (step 2.3). Searching, the company's own lead list, and Gmail and Drive. The Gmail
+  // tools can read the mailbox and put a DRAFT in it; nothing here sends mail (the source has no send call: an invariant).
+  ['search.web', { access: 'read' }],
+  ['crm.find_lead', { access: 'read' }],
+  ['crm.save_lead', { access: 'write' }],
+  ['gmail.search', { access: 'read' }],
+  ['gmail.create_draft', { access: 'write' }],
+  ['drive.list_files', { access: 'read' }],
+  ['drive.save_file', { access: 'write' }],
 ]);
 
 /** Only an exact "preview" target is routine. A missing or odd target is treated as production. */

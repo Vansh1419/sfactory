@@ -1,0 +1,24 @@
+# The Marketing and Sales team's own tools, on top of shared.yaml (PLAN.md step 2.3). Read by src/runtime/tools/config.js and
+# graded by the `sales-team` eval. Same format as shared.yaml: tool name: read | write, and the tag must match the tag the
+# tool declares itself. Listing a tool does NOT make it allowed: the policy check still decides.
+#
+# Nothing here can send an email on its own. Mail to a client goes through email.submit (a review, then the founder's card
+# while that is required) and email.send (sends only a message that passed). gmail.create_draft only fills the founder's
+# Drafts folder.
+tools:
+  # Finding out about a lead.
+  search.web: read
+
+  # The company's own lead list (leads only, never clients).
+  crm.find_lead: read
+  crm.save_lead: write
+
+  # Gmail (read and drafts) and Drive (read and save a file).
+  gmail.search: read
+  gmail.create_draft: write
+  drive.list_files: read
+  drive.save_file: write
+
+  # A message to a client: reviewed first, then the founder's card, then sent.
+  email.submit: write
+  email.send: write
