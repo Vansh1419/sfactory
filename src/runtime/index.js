@@ -26,6 +26,9 @@ const { createReviewer } = require('./outbound/review');
 const { createOutboundTools } = require('./outbound/tools');
 const { parseApprovalUntil } = require('./outbound/settings');
 const { createSupabaseTools } = require('./tools/supabase');
+const { createGitTools } = require('./tools/git');
+const { createMemoryTools } = require('./tools/memory');
+const { createPodTools } = require('./tools/pod');
 const { createSearchTools } = require('./tools/search');
 const { createCrmTools } = require('./tools/crm');
 const { createGoogleTools } = require('./tools/google');
@@ -122,9 +125,12 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const name = normaliseTool(tool);
     return (await policyTools.list()).some((row) => row.status === 'active' && normaliseTool(row.tool) === name);
   };
+  // Pods (step 3.1): a project's own space. The founder approves a card, then the folder, git history, memory note and agents are made.
+  // PODS_ROOT (an absolute path) wins over the folder main.js passes; with neither, a pod can be asked for but not opened.
+  const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, isBlocked, onError: () => runtime.emit('pods.error', {}) });
   // The Filesystem tools read inside ONE folder: FILESYSTEM_ROOT, or the app's own folder when main.js passes it.
   // With neither there are no filesystem tools (never a default of "the whole disk").
-  const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot });
+  const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot, podFolder: (podId) => pods.folderFor(podId), podsRoot: env.PODS_ROOT || podsRoot });
   // Which of the available tools are used is decided by config/mcp/shared.yaml (an allow-list with a read/write tag
   // check that fails closed: without the file there are no tools). The policy rule is still required by the loader.
   // Every tool that exists. A team gets only the ones its configuration lists (shared.yaml plus <team>.yaml).
@@ -135,6 +141,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     // GitHub only for the repositories named in GITHUB_REPOS (comma-separated owner/name), and only with a token.
     ...createGitHubTools({ token: env.GITHUB_TOKEN, repos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), fetchImpl }),
     ...createSupabaseTools({ store }),
+    // Tools that work inside ONE pod (step 3.2): its own history, memory and client. The pod is the run's, never an argument; a team gets them only by listing them.
+    ...createGitTools({ podFolder: (podId) => pods.folderFor(podId) }),
+    ...createMemoryTools({ store }),
+    ...createPodTools({ store }),
     ...createOutboundTools({ outbound }),
     // The Marketing and Sales team's tools (step 2.3). Search needs TAVILY_API_KEY; Gmail and Drive need all three GOOGLE_*
     // settings (and only read mail, make drafts and save files: nothing sends mail); the lead list is our own `clients` table.
@@ -172,9 +182,6 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
   // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
-  // Pods (step 3.1): a project's own space. The founder approves a card, then the folder, git history, memory note and agents are made.
-  // PODS_ROOT (an absolute path) wins over the folder main.js passes; with neither, a pod can be asked for but not opened.
-  const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, isBlocked, onError: () => runtime.emit('pods.error', {}) });
   const brief = createBrief({ store, decisions });
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.

@@ -32,6 +32,7 @@ function createSearchTools({ apiKey, fetchImpl = fetch } = {}) {
     Object.freeze({
       name: 'search.web',
       access: 'read',
+      podAccess: 'neutral', // the open web only: nothing of the company or of any pod
       summary: 'Searches the web and gives back the top results, one per line: title, address and a short snippet. Read-only.',
       args: `{ "query": the words to search for (at most ${MAX_QUERY_CHARS} characters), "count": optional 1 to ${MAX_COUNT} (default ${DEFAULT_COUNT}) }`,
       checkArgs(args) {

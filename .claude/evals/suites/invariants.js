@@ -217,6 +217,24 @@ const checks = [
     },
   },
   {
+    // Step 3.2 (Nov 26, 2026): every pod has its own memory, and the company has its own. The two places that touch the `memory` table both take the space
+    // from the run (memory.js) or from the pod being opened (pods/service.js), so no other module may read or write it: that is how one pod's notes can never
+    // reach another pod's run.
+    id: 'only-the-memory-tools-and-the-pods-service-touch-the-memory-table',
+    check() {
+      const allowed = [path.join('src', 'runtime', 'tools', 'memory.js'), path.join('src', 'runtime', 'pods', 'service.js')];
+      const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const offenders = walk(path.join(ROOT, 'src'))
+        .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))
+        .map((f) => path.relative(ROOT, f))
+        .filter((rel) => !allowed.includes(rel))
+        .filter((rel) => /['"`]memory['"`]/.test(stripComments(read(rel))));
+      return offenders.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `uses the memory table outside ${allowed.join(' and ')}: ${offenders.join(', ')}` };
+    },
+  },
+  {
     id: 'only-the-outbound-service-touches-the-outbound-messages-table',
     // Every message to a client is saved, reviewed and, while the founder's approval is required, approved before it can be
     // sent (step 2.2). src/runtime/outbound/service.js is the only code that may read or write the outbound_messages table, so

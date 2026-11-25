@@ -289,7 +289,7 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - Create a pod from an agency-client or SaaS template. Fill `pods` and `pod_members`. Creating a pod produces a decision card.
 - **Done when:** approving a card creates a pod with its folder, git repo and memory space.
 
-**3.2 Pod isolation** (one day)
+**3.2 Pod isolation** (one day) — status: **built and tested (Nov 26, 2026)**. The pod is in the run's context, set from the task, never an argument: `tasks.pod_id` → team → agent → every tool run. The tool loader refuses, in a pod run, any tool that has not declared `podAccess` (`scoped` or `neutral`), so a tool added later is closed to pods by default; of every real tool only twelve are open (the file, database, git, memory and client tools and the open-web and draft tools). New tools: `git.status`, `git.log`, `git.diff` (read-only, the pod's own repository), `memory.recall`, `memory.remember` (one space per pod and one for the company), `pod.get_client`. The file and database tools are scoped to the pod; a company run never reads the pods' folders. Eval `pod-isolation` (13 cases, mutation-checked), a database case that finds every table with a `pod_id` column, and an invariant that only the memory tools and the pods service touch the memory table. **Not yet:** no team lists these tools (the Engineering team in 3.3 will), GitHub is closed to pods until a pod has its own repository mapping (3.3), and memory is searched by words, not meaning (no embedding model is connected).
 - Scope file and git tools to the pod's folder in the tool layer. Namespace memory per pod. Check row-level security on every pod table.
 - **Done when:** tests show an agent in pod A cannot read pod B's files, repo, memory or client data.
 

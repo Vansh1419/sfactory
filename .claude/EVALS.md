@@ -29,14 +29,14 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 
 | Suite | Grades | Cases | Threshold | Plan step | Today |
 |---|---|---|---|---|---|
-| `invariants` | The repo itself: architecture, security settings, docs in sync | 15 | 100% | 0.4 | pass |
+| `invariants` | The repo itself: architecture, security settings, docs in sync | 16 | 100% | 0.4 | pass |
 | `policy-check` | `src/runtime/policy.js` | 46 | 100% | 1.4 | pass |
 | `decision-cards` | `src/runtime/cards.js` | 52 | 100% | 1.5 | pass |
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
 | `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 81 | 100% | 1.8 | pass |
-| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 35 | 100% | 1.1 | pass |
+| `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 36 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
 | `orchestrator-service` | `src/runtime/orchestrator/service.js`, against the real audit log and checkpoint store on a real Postgres | 33 | 100% | 1.7d | pass |
@@ -68,6 +68,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 14 | 100% | 2.5 | pass |
 | `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
 | `team-jobs` | `src/runtime/teams/jobs.js` (starting the sales or support team from the window) | 7 | 100% | 2.x follow-up | pass |
+| `pod-isolation` | `tools/{index,filesystem,git,memory,pod,supabase}.js` and `agents/{agent,team}.js` (the step 3.2 done-when: pod A cannot reach pod B), on a real database, real folders and real git | 13 | 100% | 3.2 | pass |
 | `pod-creation` | `src/runtime/pods/{service,templates}.js`, `config/pods/` and `scripts/pod.js` (the step 3.1 done-when, on a real database and real git) | 12 | 100% | 3.1 | pass |
 | `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
@@ -83,10 +84,11 @@ Update the "Today" column when a suite's status changes.
 
 Suite: `.claude/evals/suites/invariants.js`. No dataset; each case is a check function in the suite file. Runs against the repo today.
 
-**Cases:** 15
+**Cases:** 16
 
 | Case | Rule it protects |
 |---|---|
+| `only-the-memory-tools-and-the-pods-service-touch-the-memory-table` | Only `tools/memory.js` (which takes the memory space from the run) and `pods/service.js` (which writes a new pod's first note) use the `memory` table, so no other module can read one pod's notes into another pod's run (step 3.2) |
 | `runtime-never-imports-electron` | `src/runtime/` stays free of `electron` imports so it can run headless later |
 | `window-security-flags` | `src/main.js` keeps `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |
 | `renderer-csp-strict` | `index.html` has a CSP with `default-src 'self'` and no `'unsafe-inline'` or `'unsafe-eval'` |
@@ -529,7 +531,9 @@ Checked by mutation on Nov 24, 2026: 8 mistakes were introduced one at a time (a
 
 Suite: `.claude/evals/suites/database-schema.js`, with its test database in `.claude/evals/db.js`. No dataset: the two-pod fixture is in `db.js`. Code under test: `supabase/migrations/*.sql` and `supabase/seed.sql`.
 
-**Cases:** 35
+**Cases:** 36
+
+Added Nov 26, 2026 (step 3.2): **every table that holds a pod's rows is found from the database itself** (every table with a `pod_id` column) and must be in the list the isolation cases attack, and each such table, and the pods, projects, clients and agents tables a pod may see, must have a read rule that is keyed on the pod in the token. A new table with a `pod_id` column fails here until it is added to the list. Checked by mutation: taking `pod_members` out of the list was caught.
 
 Two cases (added Nov 26, 2026 for step 3.1) cover how a pod is opened: a pod that names a decision needs an approved `pod.create` decision (a pending, rejected, other-kind or missing one is refused, and one decision opens only one pod; a pod with no decision, as in the dev seed, is still allowed), and what a pod was opened for (its project, kind, decision and time) cannot be changed and a closed pod stays closed.
 
@@ -729,6 +733,14 @@ Suite: `.claude/evals/suites/pod-creation.js`. Code under test: `src/runtime/pod
 
 The step 3.1 "done when": **approving a card creates a pod with its folder, git repo and memory space.** Covers: both templates load from real files, and a broken one (a missing file, a file name that leaves the folder, an unknown team, no folder at all) is left out with a plain reason while the other still loads; **asking for a pod files a plain card and writes nothing else** (no project, no folder, no pod; always asks, category people or contracts); **approving it makes** the project, the folder with the template's files filled in (no `{{blank}}` left), a git history with exactly one commit by `sfactory`, the pod, one first memory note and the pod's agents (the template's teams only; no shared specialist and no removed agent), and announces `pod.opened`; an own product has no client and gets its own teams; a no, a card not yet answered, a card of another kind and a bad id make nothing and opening by hand is refused; one card opens one pod even when opened twice at once, and a run that stopped half way is finished **without overwriting a file the founder edited**; a card approved while the app was closed is opened on start, and **starting never touches a card that already has a pod**; the folder is always directly inside the projects folder whatever the name (`../../etc/passwd`, `.`, `/`, accents, 80 characters, control characters) and two projects with one name get two folders; fourteen kinds of bad request are refused in plain words and write nothing; with no projects folder, no templates or a blocked runtime nothing is asked or opened; **every step is audited before it is made** (if the audit log is down nothing is made) and the founder's note never reaches the audit log; a failing git leaves no pod and the run is finished later. Checked by mutation: opening cards that already have a pod, skipping the approved check, and swallowing the audit failure were each caught.
 
+### pod-isolation
+
+Suite: `.claude/evals/suites/pod-isolation.js`. Code under test: the tool layer (`tools/index.js`, `filesystem.js`, `git.js`, `memory.js`, `pod.js`, `supabase.js`) and `agents/agent.js` and `team.js`. Real Postgres with the migrations, real folders and REAL git, the real tools and loader; three pods (Alpha and Beta with a client each, and a product pod) are opened through the real pods service. Every secret of pod B contains the word BETA, so a leak is a plain text search. The database's own row-level security is graded by `database-schema`.
+
+**Cases:** 13
+
+The step 3.2 "done when": **an agent in pod A cannot read pod B's files, repo, memory or client data.** The pod is in the run's context, set from the task by the team, never in a tool's arguments. Covers: **files** (a pod reads its own folder; `../`, an absolute path, `~`, a link to another pod's folder or file, `.git`, backslashes, a NUL, odd and unknown pod ids all fail; a company run reads the company folder but never the pods' folders, even though they sit inside it); **history** (a pod reads its own log, diff and status; another pod's history, a folder that lost its `.git` under a folder that is itself a repository, a link in place of `.git`, no pod, odd ids and every argument that could name a repository, path or option fail); **memory** (a pod's notes, the company's notes and another pod's never mix; an upper-case pod id still writes to the right pod; an odd pod id never falls back to the company space; no argument can choose a space; a secret in a note is not kept); **client data** (`pod.get_client` gives only the run's own client and takes no argument); **rows** (a pod run reads only its own tasks, its own project and its members plus the shared specialists; a filter naming another pod's row gives nothing; scaling rules, clients, memory and the other tables are refused); **the tool layer** (a tool with no `podAccess` is refused in a pod run, even with an odd pod id, and is not listed to it; of every real tool only twelve are open to pods, and the GitHub, CRM, Gmail, Drive, tickets and email tools are closed); **the agent loop** (the pod comes from the task, upper-case is fixed, the model's own `podId` argument changes nothing, an unusable pod id fails the task, tool runs are audited with the pod); **the team** (a task for a pod needs an open pod, is saved with it and hands it to the worker); and **the headline**: an agent in pod A driven through fifteen attacks never sees any of pod B's files, history, memory, client or rows, while its own are readable. Checked by mutation: six rules (the loader gate, the file root, the memory space, the row filter, following a link for `.git`, and the agent dropping the pod) were each broken and caught.
+
 ## Planned evals (not built yet)
 
 Each is added before the code it grades, in the step shown. Move it into the registry above when written.
@@ -739,7 +751,6 @@ Each is added before the code it grades, in the step shown. Move it into the reg
 | `orchestrator-approval` | A goal containing a spend pauses the graph and resumes when approved | 1.7 | deterministic |
 | `mcp-tagging` | Every tool is tagged read or write; write tools that spend, send, deploy or sign go through the policy check | 1.10 | deterministic |
 | `outbound-review` | An outbound client message can't be sent without review, and the first-2-weeks setting forces a decision | 2.2 | deterministic |
-| `pod-isolation` | An agent in pod A can't read pod B's files, repo, memory or client data. The database part is already covered by `database-schema`; this adds the file, repo and tool scoping | 3.2 | deterministic |
 | `guardrails` | Max steps and tokens stop a looping agent; the kill switch stops an agent mid-task | 4.2 | deterministic |
 | `scaling` | Agents are added up to the cap, a decision card appears past it, and idle agents are removed | 4.1 | deterministic |
 

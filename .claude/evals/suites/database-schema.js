@@ -123,6 +123,28 @@ const cases = [
     },
   },
   {
+    // Step 3.2 (Nov 26, 2026): "check row-level security on every pod table". The cases above name their tables, so a table added later with a
+    // `pod_id` column would be missed. This one finds every table that holds a pod's rows and fails until it is in POD_ROWS (so the cases above attack it)
+    // and has a read rule for pods; and every table a pod may see at all must say, in its rule, that the pod is the one in the token.
+    id: 'every-table-that-holds-a-pods-rows-is-covered-by-the-isolation-cases-and-has-a-rule-keyed-on-the-pod',
+    async check(db) {
+      const problems = [];
+      const withPod = (await db.query("select table_name from information_schema.columns where table_schema = 'public' and column_name = 'pod_id' order by 1")).rows.map((r) => r.table_name);
+      const expected = [...POD_ROWS].sort();
+      if (JSON.stringify(withPod) !== JSON.stringify(expected)) problems.push(`tables with a pod_id column are [${withPod}] but the isolation cases cover [${expected}]: add the new table to POD_ROWS`);
+      const policies = (await db.query("select tablename, cmd, qual, with_check from pg_policies where schemaname = 'public'")).rows;
+      const keyed = (p) => /pod_id/i.test(`${p.qual ?? ''} ${p.with_check ?? ''}`);
+      for (const table of new Set([...withPod, ...POD_ROWS, 'pods', 'projects', 'clients', 'agents'])) {
+        const mine = policies.filter((p) => p.tablename === table);
+        if (!mine.some((p) => ['SELECT', 'ALL'].includes(p.cmd))) problems.push(`${table}: no read rule for pods`);
+        if (mine.some((p) => !keyed(p) && !/is_shared/i.test(`${p.qual}`))) problems.push(`${table}: a rule that is not keyed on the pod in the token`);
+      }
+      const noRules = (await db.query("select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relname = any($1)", [withPod])).rows.length;
+      if (noRules !== withPod.length) problems.push('a pod table could not be found');
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
     id: 'a-pod-sees-only-its-own-pod-and-project',
     async check(db) {
       const out = await withRole(db, who.pod(IDS.podA), async (tx) => ({

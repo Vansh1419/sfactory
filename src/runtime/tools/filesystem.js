@@ -40,21 +40,31 @@ const insideRoot = (root, target) => {
 };
 const partsOf = (rel) => rel.split(path.sep).filter((p) => p !== '');
 
-/** The real path of `given` (relative to the folder), or an error. Both checks happen here. */
-async function resolveInside(root, given) {
+/** The real path of a folder, or its plain absolute path when it does not exist (yet). */
+async function realOrPlain(folder) {
+  try {
+    return await fs.realpath(folder);
+  } catch {
+    return path.resolve(folder);
+  }
+}
+
+/** The real path of `given` (relative to the folder), or an error. Both checks happen here. `avoid` is a folder that is never readable through this one. */
+async function resolveInside(root, given, avoid) {
   const realRoot = await fs.realpath(root);
   const lexical = path.resolve(realRoot, given.replace(/\\/g, '/'));
   if (!insideRoot(realRoot, lexical) || path.isAbsolute(given) || given.startsWith('~')) throw new Error(CANNOT_READ);
   const real = await fs.realpath(lexical); // follows every link; fails if the path does not exist
   if (!insideRoot(realRoot, real)) throw new Error(CANNOT_READ);
+  if (avoid && insideRoot(await realOrPlain(avoid), real)) throw new Error(CANNOT_READ);
   const names = [...partsOf(path.relative(realRoot, lexical)), ...partsOf(path.relative(realRoot, real))];
   if (names.some(isDenied)) throw new Error(CANNOT_READ);
   return { realRoot, real };
 }
 
-async function readText({ root, args }) {
+async function readText({ root, args, avoid }) {
   try {
-    const { real } = await resolveInside(root, args.path);
+    const { real } = await resolveInside(root, args.path, avoid);
     const info = await fs.stat(real);
     if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error(CANNOT_READ);
     const bytes = await fs.readFile(real);
@@ -66,9 +76,10 @@ async function readText({ root, args }) {
   }
 }
 
-async function listNames({ root, args }) {
+async function listNames({ root, args, avoid }) {
   try {
-    const { realRoot, real } = await resolveInside(root, args.path);
+    const { realRoot, real } = await resolveInside(root, args.path, avoid);
+    const avoided = avoid ? await realOrPlain(avoid) : null;
     if (!(await fs.stat(real)).isDirectory()) throw new Error(CANNOT_READ);
 
     const names = [];
@@ -81,6 +92,7 @@ async function listNames({ root, args }) {
         continue; // a broken link
       }
       if (!insideRoot(realRoot, target) || partsOf(path.relative(realRoot, target)).some(isDenied)) continue;
+      if (avoided && insideRoot(avoided, target)) continue;
       names.push((await fs.stat(target)).isDirectory() ? `${entry.name}/` : entry.name);
     }
     names.sort((a, b) => a.localeCompare(b));
@@ -92,27 +104,47 @@ async function listNames({ root, args }) {
   }
 }
 
-/** The two tools, for one folder. With no usable folder (not an absolute path) there are none. */
-function createFilesystemTools({ root } = {}) {
-  if (typeof root !== 'string' || !path.isAbsolute(root)) return [];
-  const folder = path.resolve(root);
+/**
+ * The two tools. A run with no pod reads the one company folder (`root`). A run that belongs to a pod (`context.podId`, set from the task, never from
+ * the arguments) reads ONLY that pod's own folder, which `podFolder(podId)` gives: never the company folder, never another pod's. With neither a usable
+ * company folder nor a way to find pod folders there are none.
+ */
+function createFilesystemTools({ root, podFolder, podsRoot } = {}) {
+  const hasRoot = typeof root === 'string' && path.isAbsolute(root);
+  if (!hasRoot && typeof podFolder !== 'function') return [];
+  const folder = hasRoot ? path.resolve(root) : null;
+
+  // A company run never reads the pods' folders, even when they sit inside the company folder.
+  const avoid = typeof podsRoot === 'string' && path.isAbsolute(podsRoot) ? path.resolve(podsRoot) : null;
+
+  async function rootFor(context) {
+    if (context?.podId === undefined) {
+      if (!folder) throw new Error(CANNOT_READ);
+      return { root: folder, avoid };
+    }
+    const own = typeof podFolder === 'function' ? await podFolder(context.podId) : null;
+    if (typeof own !== 'string' || !path.isAbsolute(own)) throw new Error(CANNOT_READ);
+    return { root: path.resolve(own), avoid: null };
+  }
 
   return [
     Object.freeze({
       name: 'filesystem.read_file',
       access: 'read',
+      podAccess: 'scoped',
       summary: 'Reads one text file inside the project folder and gives back its text. Secrets and binary files are refused.',
       args: '{ "path": the file\'s path relative to the project folder, for example "README.md" or "src/app.js" }',
       checkArgs: checkPathArgs,
-      run: ({ args }) => readText({ root: folder, args }),
+      run: async ({ args, context }) => readText({ ...(await rootFor(context)), args }),
     }),
     Object.freeze({
       name: 'filesystem.list_directory',
       access: 'read',
+      podAccess: 'scoped',
       summary: 'Lists the files and folders inside one folder of the project (folders end with a slash). Use "." for the project folder itself.',
       args: '{ "path": the folder\'s path relative to the project folder, for example "." or "src" }',
       checkArgs: checkPathArgs,
-      run: ({ args }) => listNames({ root: folder, args }),
+      run: async ({ args, context }) => listNames({ ...(await rootFor(context)), args }),
     }),
   ];
 }

@@ -11,6 +11,10 @@
 //   - an error is one plain sentence, never the database's own message
 
 const READABLE_TABLES = Object.freeze(['tasks', 'projects', 'agents', 'scaling_rules']);
+// What a run that belongs to a pod may read (step 3.2): its own tasks, its own project, and its own members and the shared specialists. The company's
+// scaling rules are not a pod's business. The pod comes from the run's context, never from the arguments.
+const POD_READABLE_TABLES = Object.freeze(['tasks', 'projects', 'agents']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const MAX_FILTERS = 10;
@@ -41,10 +45,31 @@ function createSupabaseTools({ store } = {}) {
   if (!store || typeof store.select !== 'function') return [];
   const select = store.select.bind(store);
 
+  /** The rows of one table that belong to this pod, and nothing else. A filter that names another pod's row gives no rows. */
+  async function selectForPod(args, podId) {
+    if (typeof podId !== 'string' || !UUID.test(podId) || !POD_READABLE_TABLES.includes(args.table)) throw new Error(FAILED);
+    const id = podId.toLowerCase();
+    const limit = args.limit ?? DEFAULT_LIMIT;
+    const [pod] = await select('pods', { where: { id }, limit: 1 });
+    if (!pod) return [];
+    const where = { ...(args.where ?? {}) };
+    const pin = (column, value) => {
+      if (where[column] !== undefined && where[column] !== value) return false; // the filter names something that is not this pod's
+      where[column] = value;
+      return true;
+    };
+    if (args.table === 'tasks') return pin('pod_id', id) ? select('tasks', { where, order: args.order, limit }) : [];
+    if (args.table === 'projects') return pin('id', pod.project_id) ? select('projects', { where, order: args.order, limit }) : [];
+    const members = new Set((await select('pod_members', { where: { pod_id: id }, limit: 200 })).map((m) => m.agent_id));
+    const agents = await select('agents', { where, order: args.order, limit: 200 });
+    return agents.filter((a) => members.has(a.id) || a.is_shared === true).slice(0, limit);
+  }
+
   return [
     Object.freeze({
       name: 'supabase.select',
       access: 'read',
+      podAccess: 'scoped',
       summary: `Reads rows from one table of the company database (${READABLE_TABLES.join(', ')}) and gives them back as JSON, one row per line. Read-only.`,
       args: `{ "table": one of ${READABLE_TABLES.join(', ')}, "where": optional { column: value } equalities, "limit": optional 1 to ${MAX_LIMIT} (default ${DEFAULT_LIMIT}), "order": optional "column.asc" or "column.desc" }`,
       checkArgs(args) {
@@ -57,10 +82,12 @@ function createSupabaseTools({ store } = {}) {
         if (args.order !== undefined && !(typeof args.order === 'string' && ORDER.test(args.order))) return 'order must look like column.asc or column.desc';
         return null;
       },
-      async run({ args }) {
+      async run({ args, context }) {
         let rows;
         try {
-          rows = await select(args.table, { where: { ...(args.where ?? {}) }, order: args.order, limit: args.limit ?? DEFAULT_LIMIT });
+          rows = context?.podId === undefined
+            ? await select(args.table, { where: { ...(args.where ?? {}) }, order: args.order, limit: args.limit ?? DEFAULT_LIMIT })
+            : await selectForPod(args, context.podId);
         } catch {
           throw new Error(FAILED);
         }

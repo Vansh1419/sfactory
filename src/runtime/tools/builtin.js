@@ -18,6 +18,7 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const docsCreateDraft = Object.freeze({
   name: 'docs.create_draft',
   access: 'write',
+  podAccess: 'neutral', // writes only the text it is given: it reads nothing
   summary: 'Writes a draft document, note, message or script and gives its text back to the founder.',
   args: `{ "title": a short title or file name (up to ${MAX_TITLE_CHARS} characters), "content": the full text of the draft (up to ${MAX_CONTENT_CHARS} characters) }`,
 

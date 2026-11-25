@@ -283,6 +283,7 @@ function createFetchTools({ transport = httpsTransport } = {}) {
     Object.freeze({
       name: 'fetch.get',
       access: 'read',
+      podAccess: 'neutral', // public pages only: nothing of the company or of any pod
       summary: 'Reads the text of one public web page (https only) and gives it back. Private and internal addresses are refused.',
       args: '{ "url": the full https address of the page, for example "https://example.com/about" }',
       checkArgs(args) {

@@ -21,6 +21,11 @@ const { cleanFile } = require('./files');
 
 const NAME_SHAPE = /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/;
 const ACCESS_TAGS = ['read', 'write'];
+// How a tool behaves in a run that belongs to a pod (step 3.2). `scoped`: it reads the run's pod from its context and only ever touches that pod's own
+// files, history, memory or rows. `neutral`: it touches nothing of the company or of any pod (the open web, text it is handed). A tool with neither is
+// REFUSED in a pod run, so a tool added later is closed to pods until someone has decided how it stays inside one.
+const POD_ACCESS = ['scoped', 'neutral'];
+const NOT_IN_A_POD = 'That tool cannot be used inside a project.';
 const MAX_TEXT_CHARS = 20_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SUMMARY_CHARS = 300;
@@ -36,6 +41,7 @@ function problemWith(def) {
   if (!ACCESS_TAGS.includes(def.access)) return 'the access tag must be read or write';
   if (!isText(def.summary, MAX_SUMMARY_CHARS)) return 'it needs a plain one-sentence summary';
   if (!isText(def.args, MAX_ARGS_HINT_CHARS)) return 'it needs a line saying which arguments it takes';
+  if (def.podAccess !== undefined && !POD_ACCESS.includes(def.podAccess)) return 'podAccess must be scoped or neutral';
   if (typeof def.checkArgs !== 'function') return 'it needs an arguments check';
   if (typeof def.run !== 'function') return 'it needs a run function';
   return null;
@@ -86,8 +92,10 @@ function createToolLoader({ tools, hasRule, timeoutMs = DEFAULT_TIMEOUT_MS } = {
   }
 
   /** What the planner is told about the loaded tools. A copy: nothing here can change the loader. */
-  function describe() {
-    return [...loaded.values()].map((d) => ({ tool: d.name, access: d.access, summary: d.summary, args: d.args }));
+  function describe({ inPod = false } = {}) {
+    return [...loaded.values()]
+      .filter((d) => !inPod || POD_ACCESS.includes(d.podAccess))
+      .map((d) => ({ tool: d.name, access: d.access, summary: d.summary, args: d.args }));
   }
 
   /** Run one action. Resolves to { text? }; rejects with a plain message that never carries a tool's own text. */
@@ -99,6 +107,9 @@ function createToolLoader({ tools, hasRule, timeoutMs = DEFAULT_TIMEOUT_MS } = {
     const def = name ? loaded.get(name) : undefined;
     if (!def) throw new Error('That tool is not connected.');
     if (action.access !== def.access) throw new Error('The access tag does not match this tool, so it did not run.');
+    // A run that belongs to a pod may use only tools that say how they stay inside one. The pod is in the CONTEXT the agent loop builds from the task,
+    // never in the arguments, so a model cannot choose it. A pod id that is present but odd is still a pod run.
+    if (isObject(request.context) && request.context.podId !== undefined && !POD_ACCESS.includes(def.podAccess)) throw new Error(NOT_IN_A_POD);
 
     // The rule is checked again NOW: a rule removed after loading must stop the tool at once.
     let ruled = false;

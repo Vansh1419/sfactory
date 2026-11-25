@@ -71,6 +71,14 @@ const RULES = new Map([
   ['filesystem.list_directory', { access: 'read' }],
   ['fetch.get', { access: 'read' }],
   ['supabase.select', { access: 'read' }],
+  // Tools that work inside one pod (step 3.2): the pod is the run's, never an argument. Reading a pod's own history, memory and client is routine;
+  // saving a note in the pod's own memory is routine too (it is internal and can be read back and removed).
+  ['git.status', { access: 'read' }],
+  ['git.log', { access: 'read' }],
+  ['git.diff', { access: 'read' }],
+  ['memory.recall', { access: 'read' }],
+  ['memory.remember', { access: 'write' }],
+  ['pod.get_client', { access: 'read' }],
   ['github.read_file', { access: 'read' }],
   ['github.list_pull_requests', { access: 'read' }],
   ['github.create_pull_request', { access: 'write' }],

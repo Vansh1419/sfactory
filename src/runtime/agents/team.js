@@ -96,13 +96,26 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
     if (rawDescription !== undefined && (typeof rawDescription !== 'string' || rawDescription.length > MAX_DESCRIPTION_CHARS)) return { status: 'failed', reason: 'bad_task' };
     const description = typeof rawDescription === 'string' ? redactDetail(rawDescription) : undefined;
 
+    // A task for a pod (step 3.2) names an OPEN pod. Every tool run of this task then happens inside that pod, and only inside it.
+    const podId = request.podId;
+    if (podId !== undefined) {
+      if (typeof podId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(podId)) return { status: 'failed', reason: 'bad_pod' };
+      let pod;
+      try {
+        [pod] = await store.select('pods', { where: { id: podId.toLowerCase(), status: 'open' }, limit: 1 });
+      } catch {
+        return { status: 'failed', reason: 'store_failed' };
+      }
+      if (!pod) return { status: 'failed', reason: 'bad_pod' };
+    }
+
     const taskId = crypto.randomUUID();
     let current = null;
 
     /** Audit first, then change. */
     async function record(action, detail) {
       try {
-        await audit.append({ actorType: 'agent', actorId: lead.id, action, targetType: 'task', targetId: taskId, detail: { team, ...detail } });
+        await audit.append({ actorType: 'agent', actorId: lead.id, ...(podId ? { podId: podId.toLowerCase() } : {}), action, targetType: 'task', targetId: taskId, detail: { team, ...detail } });
       } catch {
         throw new TeamError('audit_failed');
       }
@@ -127,7 +140,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
     try {
       await record('task.created', { title });
       try {
-        await store.insert('tasks', { id: taskId, team, title, description, status: 'queued', created_by_agent_id: lead.id, assigned_agent_id: lead.id });
+        await store.insert('tasks', { id: taskId, team, title, description, status: 'queued', created_by_agent_id: lead.id, assigned_agent_id: lead.id, ...(podId ? { pod_id: podId.toLowerCase() } : {}) });
       } catch {
         throw new TeamError('store_failed');
       }
@@ -144,7 +157,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange 
         for (let attempt = 0; ; attempt += 1) {
           if (current !== 'in_progress') await setStatus('in_progress', { assigned_agent_id: worker.id, ...(outputs.length === 0 && attempt === 0 ? { started_at: new Date().toISOString() } : {}) }, { worker: worker.name });
 
-          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}) }));
+          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}), ...(podId ? { podId: podId.toLowerCase() } : {}) }));
           if (result.status === 'needs_founder') return await block('This needs the founder to decide first, so the task is waiting.', { status: 'needs_founder', request: result.request });
           if (result.status !== 'done') return await block(WORKER_STOPPED[result.reason] ?? 'The worker could not finish.');
 
