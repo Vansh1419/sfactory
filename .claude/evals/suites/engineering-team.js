@@ -293,6 +293,24 @@ const cases = [
       return verdict(ok, json({ approved, rejected, others }));
     },
   },
+  {
+    // Found on the first real run (Nov 26, 2026): with the shared allowance (60,000 tokens, 10 steps) Dev pushed the branch and then ran out one step short of
+    // opening the pull request. The git workflow needs about eleven model calls, each carrying the skills, so this team asks for more, under the absolute caps.
+    id: 'the-team-asks-the-factory-for-enough-steps-and-tokens-to-finish-the-whole-git-workflow',
+    async check() {
+      const { LIMITS } = loadSubject('src/runtime/teams/engineering.js');
+      const w = await buildWorld('team');
+      const asked = [];
+      const { createEngineeringTeam } = loadSubject('src/runtime/teams/engineering.js');
+      const factory = { buildTeam: async (input) => { asked.push(input); return { ok: false, problems: ['stop here'] }; } };
+      const team = createEngineeringTeam({ factory, decisions: w.decisions, writeCard, onError: () => {} });
+      await team.workTask({ podId: w.A.podId, title: 'x' });
+      const app = fs.readFileSync(path.join(ROOT, 'src/runtime/index.js'), 'utf8');
+      const ok = LIMITS.maxSteps >= 14 && LIMITS.maxSteps <= 20 && LIMITS.maxTokens > 60_000 && LIMITS.maxTokens <= 100_000 && asked.length === 1 && json(asked[0].limits) === json(LIMITS)
+        && /ENGINEERING_LIMITS/.test(app);
+      return verdict(ok, json({ LIMITS, asked: asked.map((a) => a.limits), routerCapFollows: /ENGINEERING_LIMITS/.test(app) }));
+    },
+  },
 ];
 
 module.exports = {

@@ -4,13 +4,14 @@
 // configuration and skills. Graded by the `team-framework` eval.
 //
 //   createAgentFactory({ router, store, audit, policy, catalogue, hasRule, configDir, skillsDir, limits? })
-//     .buildTeam({ team, lead: { name }, workers: [{ name, summary? }] }) -> { ok, team?, problems }
+//     .buildTeam({ team, lead: { name }, workers: [{ name, summary? }], limits? }) -> { ok, team?, problems }
+//       `limits` ({ maxSteps?, maxTokens? }) replaces the factory's for THIS team only; each agent still holds it to the absolute caps in agent.js
 //
 // - the team's tools are exactly what config/mcp/shared.yaml plus <team>.yaml list, that exist in the catalogue with the
 //   same read/write tag, and that have a policy rule (the loader refuses any other); never another team's
 // - the team's skills are `shared` plus <team>; never another team's. The company charter is REQUIRED: without it no team
 //   is built, so no agent ever runs without the company's rules
-// - the step and token limits reach every agent
+// - the step and token limits reach every agent (a team may ask for its own, which replace the factory's for that team only)
 // - it never throws: a problem comes back in `problems`
 
 const { createAgent } = require('./agent');
@@ -56,6 +57,9 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
 
       const { team } = input;
       const problems = [];
+      // Only a whole number of 1 or more counts; anything else is ignored and the factory's own limit stays.
+      const asked = (key) => (isObject(input.limits) && Number.isInteger(input.limits[key]) && input.limits[key] >= 1 ? { [key]: input.limits[key] } : {});
+      const teamLimits = { ...limits, ...asked('maxSteps'), ...asked('maxTokens') };
 
       const skills = loadSkills({ dir: skillsDir, team });
       problems.push(...skills.problems);
@@ -73,7 +77,7 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
       const instructions = skillsText(skills.skills);
       const workers = {};
       for (const w of input.workers) {
-        workers[w.name] = createAgent({ name: w.name, role: 'worker', team, instructions, router, tools: loader, policy, audit, limits, tier: 'cheap', events, control });
+        workers[w.name] = createAgent({ name: w.name, role: 'worker', team, instructions, router, tools: loader, policy, audit, limits: teamLimits, tier: 'cheap', events, control });
       }
       const lead = createLead({
         name: input.lead.name,

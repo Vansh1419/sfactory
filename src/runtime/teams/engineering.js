@@ -26,6 +26,11 @@ const WORKERS = Object.freeze([
   Object.freeze({ name: 'Tess', summary: 'reviews the branch the builder made, checks what can be checked (including a preview page in a browser), and reports what was and was not checked' }),
 ]);
 
+// What one worker of this team may use in one run. The shared allowance (10 steps, 60,000 tokens) is too small for the git workflow: on the first real
+// run (Nov 26, 2026) Dev pushed the branch and then ran out one step before opening the pull request. About eleven model calls are needed, each carrying
+// the skills. These are still held to the absolute caps in agents/agent.js (20 steps, 100,000 tokens).
+const LIMITS = Object.freeze({ maxSteps: 16, maxTokens: 100_000 });
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_TITLE_CHARS = 200;
 const MAX_DESCRIPTION_CHARS = 4000;
@@ -74,7 +79,7 @@ function createEngineeringTeam({ factory, decisions, writeCard, onError = () => 
   let building = null;
 
   function ensureTeam() {
-    building ??= factory.buildTeam({ team: TEAM, lead: { ...LEAD }, workers: WORKERS.map((w) => ({ ...w })) }).then((built) => {
+    building ??= factory.buildTeam({ team: TEAM, lead: { ...LEAD }, workers: WORKERS.map((w) => ({ ...w })), limits: { ...LIMITS } }).then((built) => {
       if (!built.ok) building = null; // try again next time
       return built;
     }, (err) => {
@@ -158,4 +163,4 @@ function createEngineeringTeam({ factory, decisions, writeCard, onError = () => 
   return { workTask, resume, describeAnswer };
 }
 
-module.exports = { createEngineeringTeam, checkTask, engineeringTask, TEAM, LEAD, WORKERS };
+module.exports = { createEngineeringTeam, checkTask, engineeringTask, TEAM, LEAD, WORKERS, LIMITS };

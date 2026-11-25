@@ -58,7 +58,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `task-resume` | `src/runtime/teams/resume.js`, `resume` in the two teams and `resumeTaskId` in `team.js` (a task blocked on a card carries on after the founder approves it), on a real database with real pods | 9 | 100% | 3.x follow-up | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
 | `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
-| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 24 | 100% | 2.1 | pass |
+| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 25 | 100% | 2.1 | pass |
 | `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
 | `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 24 | 100% | 2.2 | pass |
 | `search-tool` | `src/runtime/tools/search.js` (web search through Tavily) | 8 | 100% | 2.3 (search) | pass |
@@ -71,8 +71,8 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 14 | 100% | 2.5 | pass |
 | `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
 | `team-jobs` | `src/runtime/teams/jobs.js` (starting the sales or support team from the window) | 7 | 100% | 2.x follow-up | pass |
-| `engineering-tools` | `tools/{pod-files,git,github,pod,context7,browser}.js` (the step 3.3 tools, on a real database, real folders and real git with bare repositories as the GitHub side) | 8 | 100% | 3.3 | pass |
-| `engineering-team` | `teams/engineering.js`, `config/mcp/product_engineering.yaml`, `.claude/skills/product_engineering/` (the step 3.3 done-when, with the real factory, skills and tools and a scripted model) | 9 | 100% | 3.3 | pass |
+| `engineering-tools` | `tools/{pod-files,git,github,pod,context7,browser}.js` (the step 3.3 tools, on a real database, real folders and real git with bare repositories as the GitHub side) | 10 | 100% | 3.3 | pass |
+| `engineering-team` | `teams/engineering.js`, `config/mcp/product_engineering.yaml`, `.claude/skills/product_engineering/` (the step 3.3 done-when, with the real factory, skills and tools and a scripted model) | 10 | 100% | 3.3 | pass |
 | `finance-tools` | `tools/invoice.js` and `config/mcp/finance_legal_ops.yaml` (the step 3.4 tool: a draft invoice with the GST worked out in code, and no payment credential or payment tool anywhere) | 10 | 100% | 3.4 | pass |
 | `finance-team` | `teams/finance-legal-ops.js`, `config/mcp/finance_legal_ops.yaml`, `.claude/skills/finance_legal_ops/` (the step 3.4 done-when, with the real factory, skills and tools, a real database and a scripted model) | 11 | 100% | 3.4 | pass |
 | `specialist-queue` | `src/runtime/specialists.js`, `pods.setPriority` and the brief's "Shared specialists" section (the step 3.5 done-when: two pods need the same specialist and P1 is served first), on a real database with three real pods | 13 | 100% | 3.5 | pass |
@@ -445,7 +445,7 @@ Covers: one JSON action per model call (a tool, or finish); the first prompt hol
 
 Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/agents/lead.js`, `team.js` and `index.js` (the factory). Real Postgres with the real migrations: the `tasks`, `agents` and `audit_log` rows are real. The model is scripted; the policy, tool config, skills and tool loader are real.
 
-**Cases:** 24
+**Cases:** 25
 
 Added Nov 26, 2026: **the lead is told which tools its workers really have** (the same list the worker sees, in both the plan and the review) **and to judge the substance, not the format**: it rejects only for work not done, a wrong or unknowable fact, a guess about money or a person, a promise or price nobody gave, or a secret. Checked by mutation: leaving the tool list out was caught.
 
@@ -454,6 +454,8 @@ Added Nov 26, 2026: **an agent shows as working while it plans, works or reviews
 The step 2.1 "done when" is the first two cases: a team of one lead and one worker completes a task (queued, in_progress, in_review, done, with the lead's review before done), and **the lead rejects a bad worker output once, the worker tries again with the feedback in its prompt, and the task is done**. Also: rejected twice blocks the task with a reason and it is never done; a review that is not a plain `accept: true` (yes, "true", 1, `{}`, garbage, no answer) counts as a rejection; zero allowed revisions blocks at the first rejection; a plan naming an unknown worker, empty, too long or garbled runs no worker and blocks the task; a two-subtask plan runs in order and stops at the first block; a worker that needs the founder blocks the task and hands the request back, a worker that stops or fails blocks it with a plain reason; every status change is audited before it is made and an audit failure leaves the status where it was; the audit log has the task from creation to done in order; agents are registered once with the right role and tier; a task with no or an odd title is refused with no row and no model call; a secret in a task is never stored or logged. The factory: builds a team from `shared` plus its own tools and skills and no other team's, refuses to build without the company charter, refuses unknown teams and odd names, reports config problems, never gives a team a tool with no policy rule, and passes its limits to every agent.
 
 Checked by mutation on Nov 25, 2026: 14 deliberate breaks (a task done without the lead accepting, a truthy review counting as yes, status changes not audited, an unknown worker allowed in a plan, a crucial action run instead of handed back, the tool run not audited first, no step cap, tool output and final output not cleaned of secrets, no charter required, another team's tools loaded, the feedback not sent back, unlimited revisions, any team name reaching a folder), all caught.
+
+**Per-team limits (Nov 26, 2026), 1 new case:** a team can ask for its own `maxSteps` and `maxTokens`, which replace the factory's for that team only; a huge value is held to the absolute cap of 20 steps, and a bad one (text, a negative number, a list) is ignored so the factory's own limit stays.
 
 ### outbound-review
 
@@ -763,17 +765,23 @@ The step 3.2 "done when": **an agent in pod A cannot read pod B's files, repo, m
 
 Suite: `.claude/evals/suites/engineering-tools.js`, with the shared world in `.claude/evals/engineering-world.js`. Code under test: `tools/pod-files.js`, `git.js`, `github.js`, `pod.js`, `context7.js` and `browser.js`. Real Postgres with the migrations, real folders and REAL git; each GitHub repository is a bare git repository in a temporary folder, so a push really happens. GitHub's API, Context7 and the browser are stand-ins that record what they were asked.
 
-**Cases:** 8
+**Cases:** 10
 
 Covers: the world loads (three pods, two with repositories, every tool); **`pod.write_file`** writes inside the run's own pod folder only (a path with `..`, an absolute path, `~`, a link to another pod's folder or file, `.git`, secret file names, `node_modules`, a NUL, a wrong pod and no pod all fail, and nothing outside the folder changes); **branches and commits** work only on a branch of a safe shape (never `main`, never a name that could be an option), refuse a staged key or a secret file name (and leave nothing staged), never run a hook, are authored by the agent's own name, and say "nothing to save" when there is nothing; **pushing** sends only a safe branch to the pod's own repository (never the main line, never forced, a rewritten history is refused and the repository keeps what it had), the other pod's repository is untouched, a pod with no repository is told so, and the token never appears in a result, the repository's settings or an error; **GitHub in a pod run** works only on the pod's own repository (another listed repository, an unlisted one, a pod with none, the main line as the head and every merge are refused with no request made), while a company run still works as before; **`pod.info`**; **Context7** reaches one host with a fixed address shape, sends no secret, sends its key only to that host, never follows a redirect, cuts a long answer, and refuses odd library ids, topics and sizes; **the browser check** visits only public https pages (http, a login in the address, an odd port, localhost, private, link-local and mixed addresses, and a name that does not resolve are refused), asks the same check for every request the page makes, reports only plain facts, and does not exist without a browser. Checked by mutation: allowing a commit on the main line, a commit with a key, a push of the main line, any repository in a pod, writing through a link (both link checks), and writing a secret file name were each broken and caught.
+
+**First real run (Nov 26, 2026), 1 new case:** a branch for a project whose GitHub repository already has history starts from that repository's default branch (found by `git ls-remote`, fetched, and the branch made from it), so the pull request can open; before this GitHub refused it with "no history in common". An empty repository keeps the old behaviour, and a repository that cannot be reached gives a plain "Not done" and makes no branch.
+
+**Refused push (Nov 26, 2026), 1 new case:** a push refused because the branch name already exists on GitHub with different work (a stale branch from a failed earlier try) is never forced, and now comes back as a plain "Not done" result telling the agent to start a new branch with another name; before this the agent heard only "failed" and pushed the same name three times. The older push case now expects that same wording for a rewritten history.
 
 ### engineering-team
 
 Suite: `.claude/evals/suites/engineering-team.js`. Code under test: `teams/engineering.js`, `config/mcp/product_engineering.yaml` and `.claude/skills/product_engineering/` (git-workflow, code-review, testing, deploy-checklist). Real: the database, the pods service, the agent factory with the REAL skills and tool configuration, the loop, the lead, the team, the tools, the policy and the decisions service. Stand-ins: the model (a fixed script per agent), GitHub's API, Context7 and the browser.
 
-**Cases:** 9
+**Cases:** 10
 
 The step 3.3 "done when": **an agent opens a pull request in a pod repo, and a production deploy attempt becomes a decision card.** Covers: a task is checked in code before any model sees it; the team is built from its real skills and tool list and a pod worker sees only the tools that stay inside a pod (no CRM, mail, tickets or merge); **Dev changes a project on a branch, saves it, sends it to the pod's repository and opens a pull request, Tess reviews it, the lead accepts** (the remote has the branch and the file and never `main`, the fake GitHub got exactly one request, for the pod's own repository, every tool run is audited with the pod, and the other pod's folder and repository are untouched); **a production deploy (a target of production, none, or an odd spelling) and a merge each stop the agent and file a plain card tied to the pod** (category launch or pricing, task blocked, nothing sent anywhere); a preview deploy is routine but no deploy tool is connected, so it is simply not available and no card is filed; a pod that does not exist or is closed gets no task and no card and no model call; an agent told to open a pull request in another pod's repository, from the main line, or to push to another remote cannot; a pod with no repository keeps the work in its folder and the agent is told why; and after the founder answers a deploy or merge card the follow-up says nothing was done. Checked by mutation: the deploy card not being tied to the pod and a pod being allowed any repository were caught.
+
+**First real run (Nov 26, 2026), 1 new case:** the Engineering team asks the factory for its own larger allowance (16 steps, 100,000 tokens, still under the absolute caps) because the git workflow needs about eleven model calls and Dev ran out one step before opening the pull request with the shared allowance of 10 steps and 60,000 tokens.
 
 ### finance-tools
 

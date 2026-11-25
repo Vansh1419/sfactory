@@ -41,7 +41,7 @@ const { createAgentFactory } = require('./agents');
 const { createSalesTeam } = require('./teams/marketing-sales');
 const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
-const { createEngineeringTeam } = require('./teams/engineering');
+const { createEngineeringTeam, LIMITS: ENGINEERING_LIMITS } = require('./teams/engineering');
 const { createFinanceTeam } = require('./teams/finance-legal-ops');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
@@ -102,7 +102,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     sleep,
     // Per task, not overall. A team worker re-sends its skills (about 5,400 tokens) with every step, so a run of a few steps needs
     // more than the default 50,000; the agent's own cap (below) stops it first.
-    caps: { maxTokens: AGENT_LIMITS.maxTokens + 15_000 },
+    caps: { maxTokens: Math.max(AGENT_LIMITS.maxTokens, ENGINEERING_LIMITS.maxTokens) + 15_000 }, // the largest allowance of any team, plus room for the lead
   });
 
   // The outbound gate (step 2.2): every message to a client is saved, reviewed and, while the founder's approval is required,

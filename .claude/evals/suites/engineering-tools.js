@@ -15,7 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadSubject } = require('../lib');
-const { buildWorld, git, TOKEN } = require('../engineering-world');
+const { buildWorld, git, tempDir, TOKEN } = require('../engineering-world');
 
 const verdict = (pass, detail) => (pass ? { pass: true } : { pass: false, detail });
 const json = (value) => JSON.stringify(value);
@@ -158,10 +158,10 @@ const cases = [
       const ok = pushed.ok && pushed.text === 'Sent feature/one to acme/site-a.' && remoteBranches === 'feature/one' && remoteSha === localSha
         && fromMain.ok && /^Not done: .*branch/.test(fromMain.text) && noRepo.ok && /^Not done: This project has no GitHub repository/.test(noRepo.text) && fromB.ok && gitOut(remoteB, 'branch', '--list', '--format=%(refname:short)') === 'feature/beta'
         && gitOut(remoteA, 'branch', '--list', '--format=%(refname:short)') === 'feature/one' && gitOut(remoteA, 'rev-parse', 'main') === null
-        && withArgs.every((r) => !r.ok) && !rewritten.ok && remoteAfter === remoteSha
+        && withArgs.every((r) => !r.ok) && rewritten.ok && /^Not done: That branch name already exists on GitHub/.test(rewritten.text) && remoteAfter === remoteSha
         && !withToken.ok && !String(withToken.error).includes(TOKEN) && noToken.ok && /^Not done: GitHub is not connected/.test(noToken.text) && !config.includes(TOKEN) && !/\[remote/.test(config)
         && ![pushed, fromMain, noRepo, fromB, rewritten, withToken, noToken].some((r) => JSON.stringify(r).includes(TOKEN) || /sfactory-eng|fatal|remote:/i.test(r.error ?? ''));
-      return verdict(ok, json({ pushed, remoteBranches, fromMain: fromMain.text, noRepo: noRepo.text, fromB, rewritten: rewritten.error, withToken: withToken.error, noToken: noToken.text }));
+      return verdict(ok, json({ pushed, remoteBranches, fromMain: fromMain.text, noRepo: noRepo.text, fromB, rewritten: rewritten.text, withToken: withToken.error, noToken: noToken.text }));
     },
   },
   {
@@ -289,6 +289,80 @@ const cases = [
         && broken === 'The page could not be checked.' && garbage === 'The page could not be checked.' && none.every((t) => t.length === 0) && tool.podAccess === 'neutral' && tool.access === 'read'
         && ((real === 'missing' && driverNow === null) || (real === 'installed' && driverNow && typeof driverNow.visit === 'function'));
       return verdict(ok, json({ allowedWrong: allowed.filter(([, a]) => !a), deniedWrong: denied.filter(([, a]) => a), good: good.text.slice(0, 300), refusedRun, broken, garbage, real }));
+    },
+  },
+  {
+    // Found on the first real run (Nov 26, 2026): a project opens with a git history of its own (from the template), but the GitHub repository it is tied to
+    // already had a first commit. Dev pushed a branch and GitHub refused the pull request: "no history in common with main". A branch for a project whose
+    // repository already has history must therefore start from that repository's default branch. An EMPTY repository keeps the old behaviour, and a
+    // repository that cannot be reached is said plainly instead of making a branch that could never become a pull request.
+    id: 'a-branch-starts-from-the-repositorys-own-default-branch-when-it-has-history-so-the-pull-request-can-open',
+    async check() {
+      const w = await buildWorld('based');
+      const remote = w.remotes['acme/site-a'];
+      const seed = tempDir();
+      git(seed, 'init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(seed, 'README.md'), 'REMOTE-README\n');
+      fs.mkdirSync(path.join(seed, 'src'));
+      fs.writeFileSync(path.join(seed, 'src', 'remote.txt'), 'REMOTE-FILE\n');
+      git(seed, 'add', '-A');
+      git(seed, 'commit', '-q', '-m', 'The first commit of the real repository');
+      git(seed, 'push', '-q', remote, 'main');
+      const remoteMain = gitOut(remote, 'rev-parse', 'main');
+      const localMain = gitOut(w.A.folder, 'rev-parse', 'HEAD');
+      const hadTemplateFile = fs.existsSync(path.join(w.A.folder, 'app.js'));
+
+      const made = await w.use(w.A.podId, 'git.create_branch', 'write', { name: 'feature/based' });
+      const startsFromRemote = gitOut(w.A.folder, 'merge-base', '--is-ancestor', remoteMain, 'HEAD') !== null;
+      const files = { remote: fs.existsSync(path.join(w.A.folder, 'src', 'remote.txt')), template: fs.existsSync(path.join(w.A.folder, 'app.js')) };
+      await w.use(w.A.podId, 'pod.write_file', 'write', { path: 'contact.html', content: '<h1>Contact us</h1>\n' });
+      const committed = await w.use(w.A.podId, 'git.commit', 'write', { message: 'Add a contact page' });
+      const pushed = await w.use(w.A.podId, 'git.push_branch', 'write', {});
+      const common = gitOut(remote, 'merge-base', 'feature/based', 'main');
+      const poddedMain = gitOut(w.A.folder, 'rev-parse', 'master') ?? gitOut(w.A.folder, 'rev-parse', 'main');
+
+      // An empty repository (pod B's) keeps the old behaviour: the branch starts from the project's own history.
+      const emptyMade = await w.use(w.B.podId, 'git.create_branch', 'write', { name: 'feature/empty' });
+      const emptyKeeps = fs.existsSync(path.join(w.B.folder, 'app.js'));
+
+      // A repository that cannot be reached: said plainly, and no branch is made.
+      const { createGitTools } = loadSubject('src/runtime/tools/git.js');
+      const lost = createGitTools({ podFolder: (id) => w.pods.folderFor(id), podRepo: (id) => w.pods.repoFor(id), githubToken: TOKEN, remoteUrl: () => '/nonexistent/remote.git' }).find((t) => t.name === 'git.create_branch');
+      await w.use(w.A.podId, 'git.commit', 'write', { message: 'Nothing more' }); // keeps the tree clean for the next step
+      const before = gitOut(w.A.folder, 'branch', '--list');
+      const unreachable = await lost.run({ args: { name: 'feature/lost' }, context: { podId: w.A.podId, agent: 'Dev' } });
+      const after = gitOut(w.A.folder, 'branch', '--list');
+
+      const ok = made.ok && /feature\/based/.test(made.text) && hadTemplateFile && startsFromRemote && files.remote && !files.template && committed.ok && pushed.ok && common === remoteMain && remoteMain !== localMain
+        && poddedMain !== null && emptyMade.ok && emptyKeeps && /^Not done:/.test(unreachable.text) && before === after;
+      return verdict(ok, json({ made: made.text, startsFromRemote, files, common: common === remoteMain, pushed: pushed.text, emptyMade: emptyMade.text, emptyKeeps, unreachable: unreachable.text, branchesChanged: before !== after }));
+    },
+  },
+  {
+    // Found on the first real run (Nov 26, 2026): a branch name that already exists on GitHub with different work is rejected (never forced), but the agent only
+    // heard "failed" and pushed the same name again and again. It is now told in plain words, as a result it can act on, to pick another name.
+    id: 'a-push-refused-because-the-name-already-exists-on-github-with-other-work-says-so-in-plain-words-and-forces-nothing',
+    async check() {
+      const w = await buildWorld('based');
+      const remote = w.remotes['acme/site-a'];
+      const seed = tempDir();
+      git(seed, 'clone', '-q', remote, '.');
+      git(seed, 'switch', '-q', '-c', 'feature/clash');
+      fs.writeFileSync(path.join(seed, 'other.txt'), 'SOMEONE-ELSES-WORK\n');
+      git(seed, 'add', '-A');
+      git(seed, 'commit', '-q', '-m', 'Work already on GitHub under this name');
+      git(seed, 'push', '-q', 'origin', 'feature/clash');
+      const theirs = gitOut(remote, 'rev-parse', 'feature/clash');
+
+      await w.use(w.A.podId, 'git.create_branch', 'write', { name: 'feature/clash' });
+      await w.use(w.A.podId, 'pod.write_file', 'write', { path: 'mine.txt', content: 'MY-WORK\n' });
+      await w.use(w.A.podId, 'git.commit', 'write', { message: 'My work' });
+      const pushed = await w.use(w.A.podId, 'git.push_branch', 'write', {});
+      const untouched = gitOut(remote, 'rev-parse', 'feature/clash') === theirs;
+      const again = await w.use(w.A.podId, 'git.push_branch', 'write', {});
+      const ok = pushed.ok && /^Not done:/.test(pushed.text) && /already (exists|has)/i.test(pushed.text) && /another (branch )?name|different (branch )?name/i.test(pushed.text) && untouched
+        && again.ok && /^Not done:/.test(again.text) && !/github_pat|ghp_|x-access-token/.test(JSON.stringify([pushed, again]));
+      return verdict(ok, json({ pushed: pushed.text, untouched, again: again.text }));
     },
   },
 ];

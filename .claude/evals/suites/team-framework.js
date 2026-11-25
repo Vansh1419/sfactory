@@ -463,6 +463,29 @@ const cases = [
     },
   },
   {
+    // A real run of the Engineering team (Nov 26, 2026) used its whole shared allowance one step short of opening the pull request: its git workflow needs
+    // about eleven model calls. A team may ask for its own limits; they replace the factory's for that team only and are still held to the absolute caps.
+    id: 'a-team-can-ask-for-its-own-limits-which-replace-the-factorys-for-that-team-only-and-stay-under-the-absolute-caps',
+    async check() {
+      const env = await database();
+      const policy = require(path.join(ROOT, 'src/runtime/policy'));
+      const { createAgentFactory } = loadSubject('src/runtime/agents/index.js');
+      const draft = JSON.stringify({ action: 'tool', tool: 'docs.create_draft', access: 'write', args: { title: 'x' } });
+      const workerCalls = async (limits) => {
+        const router = model({ plan: [planFor('Wyl')], worker: [draft] });
+        const factory = createAgentFactory({ router, store: env.store, audit: env.audit, policy, catalogue: CATALOGUE, hasRule: async (t) => policy.isBuiltIn(t), configDir: CONFIG_DIR(), skillsDir: SKILLS_DIR(), limits: { maxSteps: 2 } });
+        const built = await factory.buildTeam({ team: 'support', lead: { name: 'Lex' }, workers: [{ name: 'Wyl' }], ...(limits === undefined ? {} : { limits }) });
+        await built.team.runTask(task('limits'));
+        return router.calls.filter((c) => c.kind === 'worker').length;
+      };
+      const own = await workerCalls({ maxSteps: 4 });
+      const plain = await workerCalls(undefined);
+      const huge = await workerCalls({ maxSteps: 999 });
+      const bad = [await workerCalls('lots'), await workerCalls({ maxSteps: -3 }), await workerCalls([])];
+      return verdict(own === 4 && plain === 2 && huge === 20 && bad.every((n) => n === 2), json({ own, plain, huge, bad }));
+    },
+  },
+  {
     // The Teams page (step 2.5) showed every agent as idle, because nothing set a status. An agent is `working` while it plans, works or reviews,
     // and `idle` again after, whatever happens; a paused agent is never overwritten. It is a display hint: it never stops a task.
     id: 'an-agent-shows-as-working-while-it-works-and-idle-after-and-a-paused-agent-is-left-alone',

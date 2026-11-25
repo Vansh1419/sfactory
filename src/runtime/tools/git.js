@@ -9,6 +9,7 @@
 //   - the repository is the one directly in the pod's folder: `.git` must be a real folder inside it (not a link), and git is told that is the whole
 //     world (GIT_DIR, GIT_WORK_TREE and a ceiling at the folder's parent), so a pod folder that lost its `.git` never reads the repository of a folder above it
 //   - git runs with no shell, no hooks, none of the machine's own settings, no pager and no lock writes. The read tools cannot change anything.
+//   - a new branch starts from the repository's own default branch when it already has history (so a pull request can open), else from the project's own
 //   - the writing tools work only on a BRANCH of a safe shape (feature/..., fix/..., chore/..., docs/..., test/...): no tool can create, commit to or push
 //     main, master or any other branch, so nothing reaches the live version by this route. Nothing is ever forced, fetched, checked out or merged.
 //   - a commit is refused when a file that holds secrets is staged or the staged text looks like it holds a key or password (and nothing is kept staged)
@@ -32,12 +33,14 @@ const NOT_DONE = 'That could not be done in the project history.';
 const SECRET_FOUND = 'A file holds something that looks like a key or a password, so nothing was saved.';
 const NO_REPO = 'This project has no GitHub repository, so there is nowhere to send the work.';
 const NO_TOKEN = 'GitHub is not connected, so the work cannot be sent.';
+const NAME_TAKEN = 'That branch name already exists on GitHub with different work, so nothing was sent and nothing was changed there. Start a new branch with another name (for example add -v2) and make the change on it.';
+const NOT_REACHED = "The project's GitHub repository could not be reached, so no branch was started. A branch started now could never become a pull request.";
 const BRANCH_NAME = /^(feature|fix|chore|docs|test)\/[a-z0-9][a-z0-9._-]{0,60}$/;
 const MAX_MESSAGE_CHARS = 500;
 const ON_MAIN = 'You are not on a branch of your own, and work is only saved on a branch. Start one with git.create_branch first.';
 // What the agent is told when a writing step is refused for a reason it can act on. It comes back as an ordinary result ("Not done: ..."), because the
 // tool loader never shows an error's own text. Every other failure is the one plain sentence NOT_DONE, and a missing or odd pod is a plain refusal.
-const REASONS = new Set([SECRET_FOUND, NO_REPO, NO_TOKEN, ON_MAIN]);
+const REASONS = new Set([SECRET_FOUND, NO_REPO, NO_TOKEN, NOT_REACHED, NAME_TAKEN, ON_MAIN]);
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -102,6 +105,17 @@ function createGitTools({ podFolder, podRepo, githubToken, remoteUrl = (repo) =>
       throw new Error(NOT_DONE);
     }
   }
+  /** How to talk to a repository: the token goes in the environment (never on a command line), and only https is allowed for a web address. */
+  function remoteAccess(url) {
+    const web = /^https:\/\//.test(url);
+    if (web && !githubToken) return { web, usable: false, header: {}, only: [] };
+    return {
+      web,
+      usable: true,
+      header: web ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}` } : {},
+      only: web ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always'] : [],
+    };
+  }
   const branchOf = async (folder) => (await runGit(folder, ['branch', '--show-current'])).trim();
 
   async function show(context, args) {
@@ -162,8 +176,33 @@ function createGitTools({ podFolder, podRepo, githubToken, remoteUrl = (repo) =>
       },
       run: ({ args, context }) => change(async () => {
         const folder = await repoFolder(podFolder, context);
-        await runGit(folder, ['switch', '-c', args.name]); // fails if the branch exists
-        return { text: `Now working on ${args.name}.` };
+        // A project opens with a git history of its own, but the repository it is tied to may already have one (found on the first real run: GitHub refused the
+        // pull request, "no history in common"). When it does, the branch starts from that repository's default branch. An empty repository keeps the old
+        // behaviour (the branch starts from the project's own history), and one that cannot be reached is said plainly.
+        const repo = typeof podRepo === 'function' ? await podRepo(context.podId) : null;
+        let base = [];
+        if (typeof repo === 'string' && repo !== '') {
+          const url = remoteUrl(repo);
+          const access = remoteAccess(url);
+          if (access.usable) {
+            let tip;
+            try {
+              tip = (await runGit(folder, [...access.only, 'ls-remote', url, 'HEAD'], access.header)).trim();
+            } catch {
+              throw new Error(NOT_REACHED);
+            }
+            if (tip !== '') {
+              try {
+                await runGit(folder, [...access.only, 'fetch', '--no-tags', '--quiet', url, 'HEAD'], access.header);
+              } catch {
+                throw new Error(NOT_REACHED);
+              }
+              base = ['FETCH_HEAD'];
+            }
+          }
+        }
+        await runGit(folder, ['switch', '-c', args.name, ...base]); // fails if the branch exists
+        return { text: base.length > 0 ? `Now working on ${args.name}, started from the repository's own latest version.` : `Now working on ${args.name}.` };
       }),
     }),
     Object.freeze({
@@ -208,11 +247,15 @@ function createGitTools({ podFolder, podRepo, githubToken, remoteUrl = (repo) =>
         const repo = typeof podRepo === 'function' ? await podRepo(context.podId) : null;
         if (typeof repo !== 'string' || repo === '') throw new Error(NO_REPO);
         const url = remoteUrl(repo);
-        const web = /^https:\/\//.test(url);
-        if (web && !githubToken) throw new Error(NO_TOKEN);
-        const header = web ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}` } : {};
-        const only = web ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always'] : [];
-        await runGit(folder, [...only, 'push', '--no-verify', url, `refs/heads/${branch}:refs/heads/${branch}`], header);
+        const access = remoteAccess(url);
+        if (!access.usable) throw new Error(NO_TOKEN);
+        try {
+          await runGit(folder, [...access.only, 'push', '--no-verify', url, `refs/heads/${branch}:refs/heads/${branch}`], access.header);
+        } catch (err) {
+          // GitHub refuses a push that is not a straight continuation of the branch already there (never forced). Say why, so the agent can pick another name.
+          if (/non-fast-forward|\(fetch first\)|rejected/i.test(String(err?.message))) throw new Error(NAME_TAKEN);
+          throw err;
+        }
         return { text: `Sent ${branch} to ${repo}.` };
       }),
     }),
