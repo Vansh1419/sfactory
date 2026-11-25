@@ -371,6 +371,24 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
    * The cards the founder approved for one tool, newest first (at most `limit`), as full rows. Read only. A service that applies the founder's answer
    * to a card of its own kind (the pods service opens a pod) uses it to find answers it missed while the app was closed; it never writes a status.
    */
+  /** The cards of one tool that are still waiting for the founder: { id, action }. Read only. */
+  async function listWaiting({ tool, limit = 100 } = {}) {
+    ensureRunning();
+    if (typeof tool !== 'string' || tool.trim() === '') throw invalid('tool must be a tool name');
+    const count = Number.isInteger(limit) && limit >= 1 && limit <= 500 ? limit : 100;
+    const rows = await store.select('decisions', { where: { status: 'pending' }, order: 'created_at.desc', limit: 500 });
+    return rows.filter((d) => d.action?.tool === tool).slice(0, count).map((d) => ({ id: d.id, action: d.action }));
+  }
+
+  /** The cards of one tool the founder said no to, newest answer first: { id, action, answeredAt }. Read only. */
+  async function listDeclined({ tool, limit = 100 } = {}) {
+    ensureRunning();
+    if (typeof tool !== 'string' || tool.trim() === '') throw invalid('tool must be a tool name');
+    const count = Number.isInteger(limit) && limit >= 1 && limit <= 500 ? limit : 100;
+    const rows = await store.select('decisions', { where: { status: 'rejected' }, order: 'resolved_at.desc', limit: 500 });
+    return rows.filter((d) => d.action?.tool === tool).slice(0, count).map((d) => ({ id: d.id, action: d.action, answeredAt: new Date(d.resolved_at).toISOString() }));
+  }
+
   async function listApproved({ tool, limit = 100 } = {}) {
     ensureRunning();
     if (typeof tool !== 'string' || tool.trim() === '') throw invalid('tool must be a tool name');
@@ -379,7 +397,7 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
     return rows.filter((d) => d.action?.tool === tool).slice(0, count);
   }
 
-  return { create, resolve, cancel, get, summary, listApproved, remindDue };
+  return { create, resolve, cancel, get, summary, listApproved, listWaiting, listDeclined, remindDue };
 }
 
 /**

@@ -14,6 +14,7 @@
     "gate:1": "node scripts/gate1.js",
     "gate:2": "node scripts/gate2.js",
     "gate:3": "node scripts/gate3.js",
+    "scale": "node scripts/scale.js",
     "lead": "node scripts/lead.js",
     "ticket": "node scripts/ticket.js",
     "pod": "node scripts/pod.js",

@@ -639,6 +639,34 @@ const checks = [
       json({ all: all.map((d) => d.id), one: one.length, none: none.length, oddLimit: oddLimit.length, noTool: noTool?.message, writes, blocked: blocked?.message }));
     },
   },
+  {
+    // Autoscaling (step 4.1) must know whether it already asked the founder about a team, and whether the founder said no lately, without reading the
+    // decision table itself (only this service may touch a decision's answer). Both are read-only, and the second mirrors `listApproved`.
+    id: 'two-read-only-lists-give-the-waiting-and-the-declined-cards-of-one-tool-without-writing-anything',
+    async check() {
+      const c = await setup();
+      const add = { tool: 'agent.add', access: 'write', args: { team: 'support', role: 'worker' } };
+      const [yes, no, waiting, other] = [await file(c, { action: add }), await file(c, { action: add }), await file(c, { action: add }), await file(c)];
+      c.state.now = new Date('2026-11-26T10:00:00Z');
+      await c.service.resolve({ id: yes.id, decision: 'approved', via: 'dashboard' });
+      c.state.now = new Date('2026-11-26T10:05:00Z');
+      await c.service.resolve({ id: no.id, decision: 'rejected', via: 'telegram' });
+      c.log.length = 0;
+      const wait = await c.service.listWaiting({ tool: 'agent.add' });
+      const rejected = await c.service.listDeclined({ tool: 'agent.add' });
+      const approved = await c.service.listApproved({ tool: 'agent.add', limit: 1 });
+      const none = await c.service.listDeclined({ tool: 'nothing.here' });
+      const badStatus = await thrown(() => c.service.listDeclined({}));
+      const noTool = await thrown(() => c.service.listWaiting({}));
+      const writes = c.log.length;
+      c.state.blocked = 'The runtime cannot write its audit log.';
+      const blocked = await thrown(() => c.service.listWaiting({ tool: 'agent.add' }));
+      return verdict(wait.length === 1 && wait[0].id === waiting.id && wait[0].action.tool === 'agent.add' && rejected.length === 1 && rejected[0].id === no.id && rejected[0].answeredAt === '2026-11-26T10:05:00.000Z'
+        && approved.length === 1 && approved[0].id === yes.id && Object.keys(approved[0]).includes('status') && none.length === 0 && badStatus?.code === 'invalid_input' && noTool?.code === 'invalid_input' && writes === 0 && blocked !== null && other.id !== undefined
+        && Object.keys(rejected[0]).sort().join() === 'action,answeredAt,id',
+      json({ wait: wait.map((d) => d.id), rejected, approved: approved.length, none: none.length, badStatus: badStatus?.code, noTool: noTool?.code, writes, blocked: blocked?.message }));
+    },
+  },
 ];
 
 module.exports = {

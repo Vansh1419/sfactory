@@ -25,6 +25,7 @@ Every one of these asks first, whatever the amount or size.
 
 **Hiring, firing or signing**
 - `freelancer.hire`, `docusign.send_for_signature`, `hr.terminate_contract`, `vendor.sign_agreement`
+- `agent.add`: adding one more agent to a team that is already at its limit. The system asks for this itself; you never do.
 
 **A launch or a price change**
 - `stripe.update_price`, `github.merge_pull_request`

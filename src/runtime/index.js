@@ -47,6 +47,7 @@ const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
 const { createTaskResumer } = require('./teams/resume');
+const { createAutoscaler } = require('./autoscaler');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
 const { createPodFiles } = require('./pods/files');
@@ -74,7 +75,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, autoscaler: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -210,6 +211,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // A task blocked on a card carries on after the founder APPROVES that card (Option B): the same task goes back in the queue and its team finishes the rest,
   // told that the approval itself did nothing (there is no tool that merges, deploys, pays or signs). It starts and stops with the runtime.
   const taskResumer = createTaskResumer({ store, audit, decisions, runtime, teams: { product_engineering: engineering, finance_legal_ops: finance }, emit, isBlocked, onError: () => runtime.emit('teams.error', {}) });
+  // Autoscaling (step 4.1): an agent is added when a team's queue grows (up to its cap, then a card asks you), idle copies are removed, and a project space
+  // whose project has ended is closed. AUTOSCALE_EVERY_SECONDS is how often it looks (default 60; "off" turns it off).
+  const autoscaler = createAutoscaler({ store, audit, decisions, runtime, emit, isBlocked, onError: () => runtime.emit('autoscale.error', {}) });
+  const autoscaleEvery = /^off$/i.test(String(env.AUTOSCALE_EVERY_SECONDS ?? '').trim()) ? null : (Number.isInteger(Number(env.AUTOSCALE_EVERY_SECONDS)) && Number(env.AUTOSCALE_EVERY_SECONDS) >= 10 ? Number(env.AUTOSCALE_EVERY_SECONDS) : 60);
   // The phone's follow-up after an answer comes from whichever team filed the card.
   const answers = { ...support, describeAnswer: async (decision) => (await support.describeAnswer(decision)) ?? (await engineering.describeAnswer(decision)) ?? (await finance.describeAnswer(decision)) };
 
@@ -270,6 +275,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     agentControl,
     agentEvents,
     taskResumer,
+    autoscaler,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -294,6 +300,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
         if (digestIssue) runtime.emit('digest.problem', { message: digestIssue });
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
+        if (autoscaleEvery !== null) autoscaler.start({ everySeconds: autoscaleEvery }); // adds, removes and closes as the work grows and ends
         taskResumer.start(); // carries on with tasks whose cards the founder approved (also while the app was closed)
         pods.start(); // listens for the founder's answers on pod cards, then opens any approved one that has no pod yet
         outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed
@@ -313,6 +320,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
       outbound.stop();
       pods.stop();
       taskResumer.stop();
+      autoscaler.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });

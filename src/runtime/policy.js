@@ -47,6 +47,7 @@ const RULES = new Map([
   ['freelancer.hire', { ask: CATEGORIES.PEOPLE }],
   ['docusign.send_for_signature', { ask: CATEGORIES.PEOPLE }],
   ['hr.terminate_contract', { ask: CATEGORIES.PEOPLE }],
+  ['agent.add', { ask: CATEGORIES.PEOPLE }], // one more agent past a team's cap (step 4.1): the autoscaler asks the founder, it never decides
   ['vendor.sign_agreement', { ask: CATEGORIES.PEOPLE }],
 
   // Production launches and price changes. Every merge asks, not only merges

@@ -56,6 +56,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `phase3-gate` | `scripts/gate3.js` (Gate 3, also run by hand with `npm run gate:3`) | 3 | 100% | 3.8 | pass |
 | `team-tasks` | `teams/jobs.js` (`startFinance`, `startEngineer`), the `teams.startFinance` and `teams.startEngineer` commands, the bot's `/finance` and `/engineer`, and the Teams page's two forms | 9 | 100% | 3.3/3.4 follow-up | pass |
 | `task-resume` | `src/runtime/teams/resume.js`, `resume` in the two teams and `resumeTaskId` in `team.js` (a task blocked on a card carries on after the founder approves it), on a real database with real pods | 9 | 100% | 3.x follow-up | pass |
+| `autoscaling` | `src/runtime/autoscaler.js` (agents added up to a cap as queues grow, a card past the cap, idle copies removed, ended project spaces closed), `scripts/scale.js`, on a fresh real database per case | 9 | 100% | 4.1 | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
 | `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
 | `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 25 | 100% | 2.1 | pass |
@@ -83,7 +84,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
 | `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 37 | 100% | 1.2 | pass |
-| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 34 | 100% | 1.6 | pass |
+| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 35 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
 Update the "Today" column when a suite's status changes.
@@ -598,7 +599,7 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were introduced into t
 
 Suite: `.claude/evals/suites/decisions-service.js`. No dataset; each case is a check function. Code under test: `src/runtime/decisions.js`. Unit tests (`src/runtime/decisions.test.js`, 19 tests, and three end-to-end tests in `runtime.integration.test.js`) back it up against an in-memory store that adds delays between every step.
 
-**Cases:** 34
+**Cases:** 35
 
 Added Nov 26, 2026 (step 3.1): **`listApproved({ tool, limit? })` gives the approved cards of one tool, newest first, and writes nothing.** The pods service uses it to find a pod card answered while the app was closed, so it never reads a decision's status itself (an invariant keeps those inside this service).
 
@@ -613,6 +614,8 @@ How it works: the cases run the service against a **real Postgres with the real 
 | Reminders | 7 | A reminder never changes a status, a resolver or a time of answer; it waits for the interval; it stops at the limit and the card stays waiting; only waiting cards are chased; two runs at once remind once; a failed notification gives its claim back so the next run retries; a deadline passing does not approve |
 
 Checked by mutation on Nov 23, 2026: 35 realistic mistakes were introduced into `decisions.js` one at a time (no compare-and-set guard, conflicts never or always reported, every caller told it changed something, an answer or a cancel allowed from a final status, the caller allowed to choose the category, an allowed action still filed, the card unchecked or stored raw, the audit entry optional or written after the write, any channel or an `agent` channel accepted, unknown options accepted, a blocked runtime still answering, an unknown id looking fine, a pasted secret stored, money unvalidated, a duplicate answer announced, card text in an event, a non-atomic reminder claim, a failed notification or an unauditable reminder keeping its claim, the reminder limit or interval ignored, a reminder that approves past a deadline, an overlapping or app-pinning reminder job). All were caught by the eval, the unit tests or the invariants, except one that is an **equivalent mutant**: making the reminder query return answered decisions changes nothing, because the reminder claim is itself guarded by `status = 'pending'`, so the rule is protected twice. Two things went wrong along the way and were fixed: the harness also ran the `invariants` suite, which was failing for an unrelated reason (this file was behind), so every result looked "caught" (the run was stopped, this file updated, and a "baseline must be clean" check added before any mutation); and one mutation's edits overlapped and did not apply, so it was re-run on its own.
+
+**Read-only lists for autoscaling (Nov 26, 2026), 1 new case:** `listWaiting({ tool })` (the cards still waiting) and `listDeclined({ tool })` (the ones the founder said no to, newest answer first, with `answeredAt`) sit beside `listApproved`, so a caller never has to read a decision's answer fields itself; both refuse a missing tool, and refuse while the runtime is blocked.
 
 ### policy-tools
 
@@ -846,6 +849,14 @@ Suite: `.claude/evals/suites/task-resume.js`. Code under test: `src/runtime/team
 **Cases:** 9
 
 Option B for "resuming a task after you approve a card" (chosen Nov 26, 2026). Covers: **a card an agent was stopped on is tied to its task (`decisions.task_id`) for both teams; approving a deploy or merge card puts the SAME blocked task back in the queue (no new row) and the team carries on, with every worker told that the approval is only the founder's answer and that nothing was merged or put live by it, and to say what is left for a person**; a payout card does the same for the Finance team ("Nothing was paid, signed or issued"); only an approved card of those two teams, with its task still blocked, resumes anything: a no, a card with no task, a support ticket's card, a task that moved on, and the same answer twice at once (one run) never do; it is audited (`task.resumed`) before the task moves, and nothing moves when the audit log is down or the runtime is blocked; a resumed run that needs the founder again files a NEW card for the same task and blocks it again, and approving that one resumes it again; a team that cannot start, or throws, puts the task back to blocked with a plain reason and the founder is told in a fixed sentence (never the error's text); a card approved while the app was closed is picked up on start, once; and the phone's follow-up says the team is picking the task up again (the old wording stays for a card with no task), and `createApp` builds, starts and stops the resumer. Mutation-checked: a no that resumes, a resume with no audit entry, workers not told about the approval and a card filed without its task are each caught.
+
+### autoscaling
+
+Suite: `.claude/evals/suites/autoscaling.js`. Code under test: `src/runtime/autoscaler.js` (`tick`, `status`, `start`, `stop`), the `agent.add` rule in `src/runtime/policy.js`, `createApp`'s wiring and `AUTOSCALE_EVERY_SECONDS`, and `scripts/scale.js`. Real: a fresh database with the migrations for each case, the real decisions service, policy and card checker; the clock is a fake the test moves.
+
+**Cases:** 9
+
+The step 4.1 "done when": **a load test adds agents up to the cap, then produces a card, then scales back down.** Covers: with 12 tasks waiting for one agent, each tick adds one agent ("Aria 2", "Aria 3") and shares the waiting work out (4, 4, 4); at the cap a tick files ONE card and a second tick files none; once the work is done and the agents have been idle long enough they are removed one per tick, the copies only; **"queue" is waiting tasks per agent** (3 for one agent adds nobody, and sharing the work out stops the adding), only tasks that have not started move, and running or blocked work stays; **"wait" is counted from the newest agent's arrival**, so a task waiting 31 minutes adds an agent but a second is not added at once; **past the cap a plain card (an always-ask `agent.add` rule, in the people category, passing the card checker) asks once, an approval adds exactly one agent beyond the cap and the same answer announced again adds none, and a no is not asked about again for a day**; only an idle copy with no open work for long enough is removed, never an original, a lead, a paused or working agent, one holding blocked work, or another team's; rules come from `scaling_rules` with built-in defaults, a disabled rule switches a group off, and the most specific rule wins; **an open project space is closed (with its members marked as left) when its project is completed or cancelled, once**; nothing changes when the audit log is down or the runtime is blocked, a tick never throws, and two ticks at once run one; and `createApp` builds, starts and stops it, `AUTOSCALE_EVERY_SECONDS` is read and documented, and `npm run scale` exists. Mutation-checked: no cap, removing an original and an approval that adds twice are each caught (moving running work is stopped by a second guard in the move itself).
 
 ## Planned evals (not built yet)
 
