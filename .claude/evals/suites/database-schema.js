@@ -32,7 +32,7 @@ const { IDS, EMBEDDING_DIMENSIONS, vec, build, applySeed, getEnv, who, withRole,
 
 const TABLES = [
   'tasks', 'agents', 'decisions', 'audit_log', 'memory', 'clients', 'projects',
-  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'graph_checkpoints', 'graph_writes', 'outbound_messages', 'tickets',
+  'agent_events', 'pods', 'pod_members', 'scaling_rules', 'policy_tools', 'app_settings', 'graph_checkpoints', 'graph_writes', 'outbound_messages', 'tickets',
 ];
 const POD_ROWS = ['tasks', 'decisions', 'memory', 'agent_events', 'audit_log', 'pod_members'];
 

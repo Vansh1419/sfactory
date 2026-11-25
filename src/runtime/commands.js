@@ -9,6 +9,7 @@ const { CommandError } = require('./runtime');
 const { DecisionError } = require('./decisions');
 const { PodFilesError } = require('./pods/files');
 const { AgentControlError } = require('./agents/control');
+const { GuardrailsError } = require('./guardrails');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DECISION_STATUSES = ['pending', 'approved', 'rejected', 'info_requested', 'cancelled'];
@@ -35,7 +36,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null, agentControl = null, agentEvents = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null, podFiles = null, pods = null, agentControl = null, agentEvents = null, guard = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -246,6 +247,33 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
   files('files.save', ['podId', 'path', 'content', 'message'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a) ?? note(a),
     (a) => podFiles.save({ podId: a.podId, path: a.path, content: a.content, ...(a.message === undefined ? {} : { message: a.message }) }), sizeOnly);
   files('files.upload', ['podId', 'path', 'content'], (a) => podArg(a) ?? pathArg(a) ?? textArg(a), (a) => podFiles.upload({ podId: a.podId, path: a.path, content: a.content }), sizeOnly);
+
+  // Guardrails (step 4.2): which teams are switched off and the limits, and the kill switch of one team. The service checks the team again and audits first.
+  runtime.register('guardrails.status', {
+    validate: (args) => unknownKey(args, []),
+    handler: async () => {
+      if (!guard) throw new CommandError('not_available', 'The guardrails are not available right now.');
+      return guard.status();
+    },
+  });
+  runtime.register('guardrails.stopTeam', {
+    validate(args) {
+      const extra = unknownKey(args, ['team', 'stopped']);
+      if (extra) return extra;
+      if (typeof args.team !== 'string' || args.team.length > 40) return 'team must be a team name';
+      if (typeof args.stopped !== 'boolean') return 'stopped must be true or false';
+      return null;
+    },
+    handler: async (args) => {
+      if (!guard) throw new CommandError('not_available', 'The guardrails are not available right now.');
+      try {
+        return await guard.stopTeam({ team: args.team, stopped: args.stopped });
+      } catch (err) {
+        if (err instanceof GuardrailsError) throw new CommandError(err.code, err.message);
+        throw err;
+      }
+    },
+  });
 
   // The agents panel and live feed (step 3.7). `agents.list` and `agents.events` read; `agents.pause`, `agents.message` and `agents.reassign` are the
   // founder's controls (each audited first by the service). The founder's note is free text: the audit entry records its length, not what it said.

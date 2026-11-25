@@ -84,10 +84,22 @@ const STOP_TEXT = Object.freeze({
   bad_answers: 'it could not produce a usable answer.',
   audit_failed: 'a step could not be recorded.',
   paused: 'it was paused.',
+  loop: 'it kept repeating the same step.',
+  daily_cap: 'it has reached its daily limit of tasks.',
+  team_stopped: 'its team is switched off.',
 });
 const FILE_TOOLS = Object.freeze({ 'filesystem.read_file': 'file_read', 'pod.write_file': 'file_written' });
 
-function createAgent({ id, name, role, team, instructions = '', router, tools, policy, audit, limits, sensitive = true, tier = 'cheap', events, control } = {}) {
+/** True when the last `repeats` tool calls were the same call with the same result, or two calls took turns (x y x y). */
+function looping(history, repeats) {
+  const sig = (h) => `${h.tool}|${JSON.stringify(h.args)}|${h.observation}`;
+  const last = history.filter((h) => h.kind === 'tool').slice(-4).map(sig);
+  const tail = last.slice(-repeats);
+  if (tail.length === repeats && tail.every((x) => x === tail[0])) return true;
+  return last.length === 4 && last[0] === last[2] && last[1] === last[3] && last[0] !== last[1];
+}
+
+function createAgent({ id, name, role, team, instructions = '', router, tools, policy, audit, limits, sensitive = true, tier = 'cheap', events, control, guard } = {}) {
   const caps = isObject(limits) ? limits : {};
   const maxSteps = clampInt(caps.maxSteps, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS);
   const maxTokens = clampInt(caps.maxTokens, DEFAULT_MAX_TOKENS, ABSOLUTE_MAX_TOKENS);
@@ -170,9 +182,18 @@ function createAgent({ id, name, role, team, instructions = '', router, tools, p
       return { status, reason, steps };
     };
 
+    // A daily cap per agent: the run is written to the audit log first, and refused past the cap (step 4.2).
+    if (guard && self.id) {
+      const started = await guard.startRun({ agentId: self.id, agentName: name, team, taskId: task.taskId }).catch(() => ({ ok: false, reason: 'audit_failed' }));
+      if (!started.ok) return halt(started.reason === 'audit_failed' ? 'failed' : 'stopped', started.reason);
+    }
+
     try {
       while (steps < maxSteps) {
         if (control && (await control.isPaused(self.id).catch(() => false))) return halt('stopped', 'paused');
+        // The team's kill switch, and a run that keeps repeating itself, end it before the model is asked again (step 4.2).
+        if (guard && (await guard.teamStopped(team).catch(() => false))) return halt('stopped', 'team_stopped');
+        if (guard && looping(history, (await guard.limits()).loopRepeats)) return halt('stopped', 'loop');
         for (const text of control?.takeMessages?.(self.id) ?? []) {
           notes.push(text);
           await note('message', `${name} read a note from the founder.`);

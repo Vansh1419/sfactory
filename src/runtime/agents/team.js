@@ -44,9 +44,12 @@ const WORKER_STOPPED = Object.freeze({
   audit_failed: 'A step could not be recorded, so the worker stopped.',
   bad_task: 'The subtask was not usable.',
   paused: 'The agent was paused by the founder, so it stopped.',
+  loop: 'The worker kept repeating the same step, so it was stopped.',
+  daily_cap: 'The worker has reached its daily limit of tasks.',
+  team_stopped: 'The team was switched off, so the worker stopped.',
 });
 
-function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange, events } = {}) {
+function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange, events, guard } = {}) {
   // Tells the app that a task or an agent changed (the Teams page then refreshes). It is a hint only: if it throws, nothing else changes.
   const changed = () => {
     try {
@@ -99,6 +102,8 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange,
 
   async function runTask(request) {
     if (!isObject(request)) return { status: 'failed', reason: 'bad_task' };
+    // A team the founder switched off takes no new task (step 4.2).
+    if (guard && (await guard.teamStopped(team).catch(() => false))) return { status: 'failed', reason: 'team_stopped' };
     const title = typeof request.title === 'string' ? redactDetail(request.title.trim()) : '';
     const rawDescription = request.description;
     if (title === '' || title.length > MAX_TITLE_CHARS) return { status: 'failed', reason: 'bad_task' };

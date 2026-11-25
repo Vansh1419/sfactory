@@ -73,6 +73,66 @@ function useTeams(ready) {
 const FIELD = 'w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900';
 const BUTTON = 'rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-900 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-50';
 
+const SWITCHES = [
+  { team: 'product_engineering', label: 'Product and Engineering' },
+  { team: 'marketing_sales', label: 'Marketing and Sales' },
+  { team: 'support', label: 'Customer Support' },
+  { team: 'finance_legal_ops', label: 'Finance, Legal and Ops' },
+];
+
+/** A kill switch for each team (step 4.2): a team that is switched off stops at its next step and takes no new work. The state comes from the runtime. */
+function TeamSwitches({ setNotice }) {
+  const [stopped, setStopped] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const result = await window.api.guardrails.status();
+    if (result.ok) setStopped(result.data.stoppedTeams);
+  }, []);
+
+  useEffect(() => {
+    load().catch(() => {});
+    return window.api.onEvent((event) => {
+      if (event?.type === 'guardrails.changed') load().catch(() => {});
+    });
+  }, [load]);
+
+  const flip = async (team, label) => {
+    const stop = !stopped.includes(team);
+    setBusy(true);
+    try {
+      const result = await window.api.guardrails.stopTeam({ team, stopped: stop });
+      setNotice(result.ok
+        ? { kind: 'start', message: stop ? `The ${label} team is switched off. Its agents stop at their next step.` : `The ${label} team is switched on again.`, tone: stop ? 'waiting' : 'ok' }
+        : { kind: 'start', message: result.error.message, tone: 'problem' });
+      await load();
+    } catch {
+      setNotice({ kind: 'start', message: 'That could not be done.', tone: 'problem' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="Team switches">
+      <h3 className="text-base font-semibold text-slate-900">Team switches</h3>
+      <p className="mt-1 text-xs text-slate-600">Switch a team off to stop its agents at their next step and keep it from taking new work.</p>
+      <ul className="mt-2 flex flex-wrap gap-2">
+        {SWITCHES.map(({ team, label }) => {
+          const off = stopped.includes(team);
+          return (
+            <li key={team}>
+              <button type="button" disabled={busy} onClick={() => flip(team, label)} className={BUTTON} aria-pressed={off}>
+                {off ? `Switch ${label} on` : `Switch ${label} off`}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** Give the Finance, Legal and Ops team or the Engineering team a task. Engineering works inside one project, so it needs one; finance may have one. */
 function TaskForms({ setNotice }) {
   const [projects, setProjects] = useState([]);
@@ -315,6 +375,7 @@ export default function TeamsPanel({ ready }) {
       <StartWork setNotice={setNotice} />
 
       <TaskForms setNotice={setNotice} />
+      <TeamSwitches setNotice={setNotice} />
       {notice && (
         <p role="status" className={`mt-2 text-sm ${TEXT_STYLES[notice.tone] ?? TEXT_STYLES.neutral}`}>
           {notice.message}

@@ -48,6 +48,7 @@ const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
 const { createTaskResumer } = require('./teams/resume');
 const { createAutoscaler } = require('./autoscaler');
+const { createGuardrails } = require('./guardrails');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
 const { createPodFiles } = require('./pods/files');
@@ -75,7 +76,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, autoscaler: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, autoscaler: null, guardrails: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -199,7 +200,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // agent, type it a note and move a waiting task. Trusted code only: an agent is never handed the control.
   const agentEvents = createAgentEvents({ store, emit });
   const agentControl = createAgentControl({ store, audit, events: agentEvents, emit, isBlocked });
-  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS, onChange: () => runtime.emit('tasks.changed', {}), events: agentEvents, control: agentControl });
+  // Guardrails (step 4.2): a daily task cap per agent, loop detection and a kill switch per team, on top of the step and token caps. The values are read live from
+  // the `app_settings` table (a missing table gives the defaults). Trusted code only: an agent is never handed this.
+  const guardrails = createGuardrails({ store, audit, isBlocked, emit, onError: () => runtime.emit('guardrails.error', {}) });
+  const agents = createAgentFactory({ router, store, audit, policy: policyTools.policy, catalogue, hasRule, configDir: toolConfigDir, skillsDir, limits: AGENT_LIMITS, onChange: () => runtime.emit('tasks.changed', {}), events: agentEvents, control: agentControl, guard: guardrails });
   const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
   // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
   // becomes a founder card and marks the ticket escalated.
@@ -227,7 +231,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
   const jobs = createTeamJobs({ sales, support, engineering, finance, emit, onError: () => runtime.emit('teams.error', {}) });
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods, agentControl, agentEvents });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods, agentControl, agentEvents, guard: guardrails });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -248,6 +252,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     support: answers,
     engineering,
     finance,
+    agentControl,
+    guard: guardrails,
     projects: async () => (await pods.list()).filter((p) => p.status === 'open').map((p) => ({ id: p.id, name: p.name })),
     audit,
     onError: () => runtime.emit('telegram.error', {}),
@@ -276,6 +282,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     agentEvents,
     taskResumer,
     autoscaler,
+    guardrails,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */

@@ -27,6 +27,7 @@ const MAX_MESSAGE_CHARS = 400;
 
 const REASONS = Object.freeze({
   team_unavailable: 'The team is not available right now.',
+  team_stopped: 'That team is switched off. Switch it on again first.',
   not_available: 'That ticket is not open any more (it may already be taken, answered or closed).',
   bad_ticket: 'That is not a ticket id.',
   card_failed: 'A card for you could not be written, so the ticket was put back to open.',

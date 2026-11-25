@@ -45,7 +45,7 @@ function telegramProblem(env) {
 }
 
 /** Returns null when Telegram is not set up. `start()` begins work; `stop()` ends it. */
-function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, brief, teams, sales, support, engineering, finance, projects, audit, onError = () => {} }) {
+function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, brief, teams, sales, support, engineering, finance, projects, agentControl, guard, audit, onError = () => {} }) {
   if (telegramProblem(env) !== null) return null;
   const token = clean(env.TELEGRAM_BOT_TOKEN);
   const chatId = clean(env.TELEGRAM_FOUNDER_CHAT_ID);
@@ -56,7 +56,7 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
   const briefText = brief ? async () => renderBriefText(await brief.get()) : undefined;
   // /status shows the same overview as the window's Teams page.
   const statusText = teams ? async (query) => renderStatusText(await teams.list(), query) : undefined;
-  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, engineering, finance, projects, onError });
+  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, engineering, finance, projects, agentControl, guard, onError });
   const digestSetting = parseDigestTime(env.DIGEST_TIME_IST);
   // A day's send is written to the audit log, so a restart the same day does not send it again.
   const ledger = store && audit ? {

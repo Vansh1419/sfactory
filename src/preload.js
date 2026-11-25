@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld('api', {
     save: (args) => invoke('files.save', args),
     upload: (args) => invoke('files.upload', args),
   },
+  guardrails: {
+    status: () => invoke('guardrails.status'),
+    stopTeam: (args) => invoke('guardrails.stopTeam', args),
+  },
   agents: {
     list: () => invoke('agents.list'),
     events: (args) => invoke('agents.events', args),

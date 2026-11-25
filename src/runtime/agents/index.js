@@ -49,7 +49,7 @@ function checkRequest(input) {
   return problems;
 }
 
-function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, configDir, skillsDir, limits, onChange, events, control } = {}) {
+function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, configDir, skillsDir, limits, onChange, events, control, guard } = {}) {
   async function buildTeam(input) {
     try {
       const bad = checkRequest(input);
@@ -77,7 +77,7 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
       const instructions = skillsText(skills.skills);
       const workers = {};
       for (const w of input.workers) {
-        workers[w.name] = createAgent({ name: w.name, role: 'worker', team, instructions, router, tools: loader, policy, audit, limits: teamLimits, tier: 'cheap', events, control });
+        workers[w.name] = createAgent({ name: w.name, role: 'worker', team, instructions, router, tools: loader, policy, audit, limits: teamLimits, tier: 'cheap', events, control, guard });
       }
       const lead = createLead({
         name: input.lead.name,
@@ -87,7 +87,7 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
         toolNames: loader.describe().map((t) => t.tool),
         workers: input.workers.map((w) => ({ name: w.name, summary: typeof w.summary === 'string' ? w.summary : '' })),
       });
-      const built = createTeam({ team, lead, workers, store, audit, onChange, events });
+      const built = createTeam({ team, lead, workers, store, audit, onChange, events, guard });
       try {
         await built.register();
       } catch {

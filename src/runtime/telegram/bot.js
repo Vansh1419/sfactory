@@ -37,10 +37,6 @@ const BRIEF_UNAVAILABLE = 'The brief is not available right now.';
 
 const STATUS_UNAVAILABLE = 'The team status is not available right now.';
 
-const NOT_YET = {
-  pause: 'Pausing an agent is not available yet. It arrives with the agent controls.',
-};
-
 const HELP = [
   'What I can do:',
   '/tools - list the tools you have added',
@@ -54,7 +50,8 @@ const HELP = [
   '/engineer <project> | <what to do> - give the engineering team a task inside one project',
   '/brief - today\'s brief (leads, tickets, spend requests and what is waiting for you)',
   '/status [team] - how the teams are doing (try /status sales or /status support)',
-  '/pause <agent> - pause an agent (not available yet)',
+  '/pause <agent> - pause one agent: it stops at its next step (/resume <agent> lets it go on)',
+  '/pause team <team> - switch a whole team off (/resume team <team> switches it on again)',
   '/help - this list',
 ].join('\n');
 
@@ -76,6 +73,18 @@ const TICKET_USAGE = 'Usage: /ticket (the oldest open ticket) or /ticket <ticket
 const FINANCE_USAGE = 'Usage: /finance <what to do> or /finance <project> | <what to do>\nFor example: /finance Alpha | Invoice the client for the website design';
 const ENGINEER_USAGE = 'Usage: /engineer <project> | <what to do>\nFor example: /engineer Alpha | Add a contact page';
 const MAX_TASK_TITLE_CHARS = 200;
+const PAUSE_USAGE = 'Usage: /pause <agent> or /pause team <team>\nFor example: /pause Aria, or /pause team support';
+const RESUME_USAGE = 'Usage: /resume <agent> or /resume team <team>\nFor example: /resume Aria, or /resume team support';
+const TEAM_WORDS = Object.freeze({
+  product_engineering: 'Product and Engineering', marketing_sales: 'Marketing and Sales', support: 'Customer Support', finance_legal_ops: 'Finance, Legal and Ops', orchestrator: 'Orchestrator',
+});
+const TEAM_ALIASES = Object.freeze({
+  engineering: 'product_engineering', product: 'product_engineering', 'product and engineering': 'product_engineering',
+  sales: 'marketing_sales', marketing: 'marketing_sales', 'marketing and sales': 'marketing_sales',
+  support: 'support', 'customer support': 'support',
+  finance: 'finance_legal_ops', legal: 'finance_legal_ops', ops: 'finance_legal_ops', 'finance legal and ops': 'finance_legal_ops',
+  orchestrator: 'orchestrator',
+});
 const EMAIL_WORD = /^[^\s@,;<>()[\]\\]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$/;
 const TEAM_REASONS = Object.freeze({
   team_unavailable: 'The team is not available right now.',
@@ -186,7 +195,7 @@ function describeRule(rule) {
   return rule.status === 'proposed' ? `${base} - waiting for your Yes` : base;
 }
 
-function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, engineering, finance, projects, onError = () => {} }) {
+function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, engineering, finance, projects, agentControl, guard, onError = () => {} }) {
   const founder = Number(founderChatId);
   const reply = (text, buttons) => api.sendMessage({ chatId: founder, text, buttons });
   const toast = (callbackId, text) => api.answerCallback({ id: callbackId, text: clip(text, MAX_TOAST_CHARS) });
@@ -359,6 +368,56 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
     return startTeamRun('engineering', () => engineering.workTask({ podId: found.podId, title }));
   }
 
+  // ---- /pause and /resume: one agent, or a whole team --------------------------------------------
+
+  /** An agent named in words: the whole name, or a part of it, in any case. One match is the agent; none or several is said plainly. */
+  async function findAgent(words) {
+    const wanted = words.trim().toLowerCase();
+    let agents;
+    try {
+      agents = (await agentControl.list()).agents;
+    } catch (err) {
+      onError(err);
+      return { ok: false, text: GENERIC_ERROR };
+    }
+    const name = (a) => String(a.name ?? '');
+    const exact = agents.filter((a) => name(a).toLowerCase() === wanted);
+    const found = exact.length > 0 ? exact : agents.filter((a) => name(a).toLowerCase().includes(wanted));
+    const shown = clip(words.trim().replace(/[\u0000-\u001f\u007f]/g, ' '), 60);
+    if (found.length === 0) return { ok: false, text: `I could not find an agent called "${shown}". Send /status to see the teams.` };
+    if (found.length > 1) return { ok: false, text: `"${shown}" matches more than one agent: ${found.map(name).slice(0, 10).join(', ')}. Please write more of the name.` };
+    return { ok: true, agent: found[0] };
+  }
+
+  async function pauseOrResume(rest, paused) {
+    const usage = paused ? PAUSE_USAGE : RESUME_USAGE;
+    const text = String(rest ?? '').trim();
+    if (text === '') return reply(usage);
+    const teamWords = /^team\s+(.+)$/i.exec(text);
+    try {
+      if (teamWords) {
+        if (!guard) return reply('Switching teams off is not available right now.');
+        const team = TEAM_ALIASES[teamWords[1].trim().toLowerCase()] ?? (TEAM_WORDS[teamWords[1].trim()] ? teamWords[1].trim() : null);
+        if (!team) return reply(`I could not find a team called "${clip(teamWords[1].trim(), 40)}". Try: engineering, sales, support or finance.`);
+        const done = await guard.stopTeam({ team, stopped: paused });
+        if (!done.changed) return reply(paused ? `The ${TEAM_WORDS[team]} team is already switched off.` : `The ${TEAM_WORDS[team]} team is already switched on.`);
+        return reply(paused
+          ? `The ${TEAM_WORDS[team]} team is switched off. Its agents stop at their next step and it takes no new work until you send /resume team ${teamWords[1].trim().toLowerCase()}.`
+          : `The ${TEAM_WORDS[team]} team is switched on again.`);
+      }
+      if (!agentControl) return reply('Pausing is not available right now.');
+      const found = await findAgent(text);
+      if (!found.ok) return reply(found.text);
+      const done = await agentControl.pause({ agentId: found.agent.id, paused });
+      if (!done.changed) return reply(paused ? `${found.agent.name} is already paused.` : `${found.agent.name} is not paused.`);
+      return reply(paused ? `Paused ${found.agent.name}. It stops at its next step. Send /resume ${found.agent.name} to let it go on.` : `${found.agent.name} can work again.`);
+    } catch (err) {
+      if (typeof err?.code === 'string' && typeof err.message === 'string' && ['AgentControlError', 'GuardrailsError'].includes(err.name)) return reply(err.message);
+      onError(err);
+      return reply(GENERIC_ERROR);
+    }
+  }
+
   // ---- goals ----------------------------------------------------------------------------
 
   let goalsRunning = 0;
@@ -411,7 +470,9 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
         // The same numbers and words as the window's Teams page (overview.js builds both from the same data).
         return reply(typeof statusText === 'function' ? await statusText(rest) : STATUS_UNAVAILABLE);
       case 'pause':
-        return reply(NOT_YET[cmd]);
+        return pauseOrResume(rest, true);
+      case 'resume':
+        return pauseOrResume(rest, false);
       case 'tools': {
         const rules = await policyTools.list();
         if (rules.length === 0) return reply('You have not added any tools. The built-in rules always apply.');

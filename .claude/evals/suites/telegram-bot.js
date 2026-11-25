@@ -795,11 +795,11 @@ const cases = [
 
   // ---- Other commands ---------------------------------------------------------
   {
-    id: 'pause-says-it-is-not-available-yet-and-calls-nothing',
+    id: 'pause-says-it-is-not-available-with-no-agent-service-and-calls-nothing',
     async check() {
       const h = harness();
       await h.bot.handleUpdate(text(FOUNDER, '/pause agent-1'));
-      return verdict(h.sent.length === 1 && /not available yet/i.test(h.sent[0].text) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+      return verdict(h.sent.length === 1 && /Pausing is not available right now/i.test(h.sent[0].text) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
     },
   },
   {

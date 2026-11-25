@@ -60,7 +60,7 @@ test('applies every migration to a fresh project, records them, and a second run
   assert.equal(first.applied.length, migrations.length);
   // Pinned on purpose: a new table is a deliberate change, so adding one means updating this list.
   assert.deepEqual(await tableNames(db), [
-    'agent_events', 'agents', 'audit_log', 'clients', 'decisions', 'graph_checkpoints', 'graph_writes', 'memory', 'outbound_messages', 'pod_members', 'pods', 'policy_tools', 'projects', 'scaling_rules', 'tasks', 'tickets',
+    'agent_events', 'agents', 'app_settings', 'audit_log', 'clients', 'decisions', 'graph_checkpoints', 'graph_writes', 'memory', 'outbound_messages', 'pod_members', 'pods', 'policy_tools', 'projects', 'scaling_rules', 'tasks', 'tickets',
   ]);
   assert.deepEqual(await recorded(db), migrations.map((x) => x.version));
 
