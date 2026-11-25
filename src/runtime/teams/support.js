@@ -52,7 +52,7 @@ function ticketTask(ticketId) {
   };
 }
 
-function createSupportTeam({ factory, store, decisions, writeCard, onError = () => {} } = {}) {
+function createSupportTeam({ factory, store, decisions, writeCard, outbound, onError = () => {} } = {}) {
   let building = null;
 
   function ensureTeam() {
@@ -155,7 +155,21 @@ function createSupportTeam({ factory, store, decisions, writeCard, onError = () 
         onError(err);
       }
       if (now?.status === 'answered') return { ...result, ticket: 'answered' };
-      // The team finished but never recorded an answer: the ticket is not answered, so it goes back.
+      // The worker may have sent the reply and forgotten to record it (a real model did). The answer must not depend on that: if a
+      // reply to this customer passed review since the ticket was taken, record it here. Reopening the ticket would invite a second
+      // email to the same customer.
+      if (now?.status === 'in_progress' && typeof outbound?.latestReplyFor === 'function') {
+        try {
+          const reply = await outbound.latestReplyFor({ team: TEAM, to: ticket.customer_email, since: ticket.updated_at });
+          if (reply) {
+            const changed = await store.update('tickets', { id: ticketId, status: 'in_progress' }, { status: 'answered', reply_message_id: reply.id });
+            if (Array.isArray(changed) && changed.length > 0) return { ...result, ticket: 'answered' };
+          }
+        } catch (err) {
+          onError(err);
+        }
+      }
+      // The team finished but never recorded an answer, and no reviewed reply exists: the ticket is not answered, so it goes back.
       await release(ticketId);
       return { status: 'failed', reason: 'not_answered', taskId: result.taskId };
     }

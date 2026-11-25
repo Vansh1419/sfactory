@@ -162,7 +162,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const sales = createSalesTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('sales.error', {}) });
   // The Customer Support team (step 2.4): works one ticket from the `tickets` table; a refund, discount, complaint or legal matter
   // becomes a founder card and marks the ticket escalated.
-  const support = createSupportTeam({ factory: agents, store, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('support.error', {}) });
+  const support = createSupportTeam({ factory: agents, store, decisions, writeCard: createModelCardWriter({ router }), outbound, onError: () => runtime.emit('support.error', {}) });
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.

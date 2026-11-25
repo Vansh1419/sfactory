@@ -236,7 +236,20 @@ function createOutbound({ store, audit, decisions, review, writeCard, send, appr
     return message ?? null;
   }
 
-  return { submit, send: sendMessage, get, start, stop };
+  /**
+   * The newest message a team wrote to this address since a moment, if it passed review (it waits for the founder, is ready, or was
+   * sent). The support team uses it to record that a ticket was answered when the worker sent the reply but did not record it.
+   * Returns { id, team, to_address, status } or null. This service stays the only code that reads the table.
+   */
+  async function latestReplyFor(input) {
+    const { team, to, since } = isObject(input) ? input : {};
+    if (!TEAMS.includes(team) || typeof to !== 'string' || to === '' || typeof since !== 'string' || Number.isNaN(Date.parse(since))) return null;
+    const rows = await store.select('outbound_messages', { where: { team }, order: 'created_at.desc', limit: MAX_RECOVERED });
+    const found = rows.find((m) => String(m.to_address).toLowerCase() === to.toLowerCase() && Date.parse(m.created_at) >= Date.parse(since) && ['awaiting_founder', 'ready', 'sent'].includes(m.status));
+    return found ? { id: found.id, team: found.team, to_address: found.to_address, status: found.status } : null;
+  }
+
+  return { submit, send: sendMessage, get, latestReplyFor, start, stop };
 }
 
 module.exports = { createOutbound };

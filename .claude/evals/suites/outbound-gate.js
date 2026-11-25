@@ -369,6 +369,32 @@ const cases = [
       json({ names, withTeam, sub: sub.text, early: early.text, late: late.text, sent: h.sent.length }));
     },
   },
+  {
+    id: 'the-latest-reviewed-reply-to-an-address-can-be-found-for-one-team-and-nothing-else',
+    // The support team uses this to record a ticket as answered when the worker sent the reply but did not record it. This service
+    // stays the only code that reads the table, so the lookup lives here and gives back only { id, team, to_address, status }.
+    async check() {
+      const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const to = `Zed.${tag}@Example.com`;
+      const since = new Date(Date.now() - 60_000).toISOString();
+      const h = await build();
+      const older = await submit(h, 'one', { team: 'support', to });
+      const newer = await submit(h, 'two', { team: 'support', to: to.toLowerCase() });
+      const found = await h.outbound.latestReplyFor({ team: 'support', to: to.toUpperCase(), since });
+      const otherTeam = await h.outbound.latestReplyFor({ team: 'marketing_sales', to, since });
+      const otherAddress = await h.outbound.latestReplyFor({ team: 'support', to: `nobody.${tag}@example.com`, since });
+      const future = await h.outbound.latestReplyFor({ team: 'support', to, since: new Date(Date.now() + 3_600_000).toISOString() });
+      const failedHarness = await build({ reviewer: reviewer(['fail']) });
+      const failedTo = `fail.${tag}@example.com`;
+      await submit(failedHarness, 'bad', { team: 'support', to: failedTo });
+      const notReviewed = await failedHarness.outbound.latestReplyFor({ team: 'support', to: failedTo, since });
+      const bad = [undefined, null, {}, { team: 'support' }, { team: 'sales', to, since }, { team: 'support', to: '', since }, { team: 'support', to, since: 'nope' }, { team: 'support', to, since: 5 }];
+      const badResults = [];
+      for (const input of bad) badResults.push(await h.outbound.latestReplyFor(input));
+      return verdict(older.messageId && newer.messageId && found?.id === newer.messageId && found.status === 'awaiting_founder' && found.team === 'support' && Object.keys(found).sort().join() === 'id,status,team,to_address'
+        && otherTeam === null && otherAddress === null && future === null && notReviewed === null && badResults.every((r) => r === null), json({ found, otherTeam, otherAddress, future, notReviewed, badResults }));
+    },
+  },
 ];
 
 module.exports = {

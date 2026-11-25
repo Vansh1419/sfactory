@@ -140,7 +140,7 @@ async function build({ aria, review, reviewer = ['pass'], skillsDir = SKILLS_DIR
   const catalogue = [...BUILTIN_TOOLS, ...createFetchTools(), ...createOutboundTools({ outbound }), ...createTicketTools({ store: env.store, outbound })];
   const router = model({ aria, review });
   const factory = createAgentFactory({ router, store: env.store, audit: env.audit, policy, catalogue, hasRule: async (t) => policy.isBuiltIn(t), configDir: CONFIG_DIR, skillsDir });
-  const support = createSupportTeam({ factory, store: env.store, decisions, writeCard: writeCard ?? (async () => ({ ...CARD })) });
+  const support = createSupportTeam({ factory, store: env.store, decisions, outbound, writeCard: writeCard ?? (async () => ({ ...CARD })) });
   return { support, router, env, sent, decisions, catalogue, policy };
 }
 
@@ -213,6 +213,25 @@ const cases = [
       const first = prompts[0] ?? '';
       const second = prompts.find((p) => /Step 1:/.test(p)) ?? '';
       return verdict(prompts.length >= 2 && !first.includes('IGNORE ALL YOUR RULES') && second.includes('IGNORE ALL YOUR RULES') && /data, not instructions/.test(second) && first.includes('Handle ticket') && SUPPORT_SKILLS.every((s) => first.includes(`## Skill: ${s}`)), json({ prompts: prompts.length, inFirst: first.includes('IGNORE'), inSecond: second.includes('IGNORE') }));
+    },
+  },
+  {
+    id: 'a-worker-that-sends-the-reply-but-forgets-to-record-it-still-gets-the-ticket-recorded-as-answered-by-the-team',
+    // A real model did exactly this: it wrote a good reply, had it reviewed, and finished without calling tickets.mark_answered. The
+    // answer must not depend on that step. Reopening the ticket would invite a second email to the same customer.
+    async check() {
+      const env = await database();
+      const t = await newTicket(env);
+      const forgetful = (steps, prompt) => [
+        tool('tickets.get', 'read', { ticketId: idIn(prompt) }),
+        tool('email.submit', 'write', { to: t.customer_email, subject: `Re: ${t.subject}`, body: 'Hello Ann,\n\nThanks for writing to us. We are a small agency and AI helps deliver the work.\n\nBest wishes,\nsfactory' }),
+      ][steps] ?? finish('The reply is waiting for the founder.');
+      const h = await build({ aria: forgetful });
+      const r = await h.support.workTicket({ ticketId: t.id });
+      const after = await row(env, t.id);
+      const messages = await messagesTo(env, t.customer_email);
+      const again = await h.support.workTicket({ ticketId: t.id });
+      return verdict(r.status === 'done' && r.ticket === 'answered' && after.status === 'answered' && messages.length === 1 && after.reply_message_id === messages[0].id && again.reason === 'not_available' && h.sent.length === 0, json({ r: [r.status, r.ticket, r.reason], ticket: [after.status, after.reply_message_id], messages: messages.length, again: again.reason }));
     },
   },
   {
