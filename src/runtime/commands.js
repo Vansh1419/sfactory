@@ -33,7 +33,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null, jobs = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -117,6 +117,42 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
     handler: async () => {
       if (!teams) throw new CommandError('not_available', 'The teams are not available right now.');
       return teams.list();
+    },
+  });
+
+  // Start a team from the Teams page. Each command only STARTS the job and answers at once (a team takes minutes); how it ended arrives later as the
+  // runtime event `team.job_finished`, and what the team writes for the founder arrives as its own card. The details are checked again by the jobs
+  // service before any team sees them. The audit log records the company and only the DOMAIN of an email address, never the address.
+  const text = (v, max) => typeof v === 'string' && v.length <= max;
+  runtime.register('teams.startLead', {
+    validate(args) {
+      const extra = unknownKey(args, ['company', 'website', 'email', 'price']);
+      if (extra) return extra;
+      if (!text(args.company, 200)) return 'company must be text';
+      for (const [key, max] of [['website', 300], ['email', 200], ['price', 100]]) if (args[key] !== undefined && !text(args[key], max)) return `${key} must be text`;
+      return null;
+    },
+    auditArgs: (args) => ({ company: String(args.company).slice(0, 80), emailDomain: typeof args.email === 'string' && args.email.includes('@') ? args.email.split('@').pop().slice(0, 80) : null, hasWebsite: args.website !== undefined, hasPrice: args.price !== undefined }),
+    handler: async (args) => {
+      if (!jobs) throw new CommandError('not_available', 'The teams are not available right now.');
+      const started = jobs.startLead(args);
+      if (!started.ok) throw new CommandError(started.code, started.message);
+      return { started: true, message: started.message };
+    },
+  });
+
+  runtime.register('teams.startTicket', {
+    validate(args) {
+      const extra = unknownKey(args, ['ticketId']);
+      if (extra) return extra;
+      if (args.ticketId !== undefined && !(typeof args.ticketId === 'string' && UUID.test(args.ticketId))) return 'ticketId must be a ticket id';
+      return null;
+    },
+    handler: async (args) => {
+      if (!jobs) throw new CommandError('not_available', 'The teams are not available right now.');
+      const started = jobs.startTicket(args);
+      if (!started.ok) throw new CommandError(started.code, started.message);
+      return { started: true, message: started.message };
     },
   });
 

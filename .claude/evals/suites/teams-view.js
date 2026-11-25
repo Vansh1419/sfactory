@@ -147,9 +147,49 @@ const cases = [
     id: 'a-task-or-agent-announcement-and-the-runtime-becoming-ready-mean-load-the-teams-again',
     check() {
       const v = view();
-      const yes = [{ type: 'tasks.changed' }, { type: 'tasks.changed', data: {} }, { type: 'runtime.ready' }];
+      const yes = [{ type: 'tasks.changed' }, { type: 'tasks.changed', data: {} }, { type: 'runtime.ready' }, { type: 'team.job_finished', data: { kind: 'lead', status: 'done', message: 'x' } }];
       const no = [{ type: 'decision.created' }, { type: 'orchestrator.run' }, { type: 'tasks' }, { type: 'tasks.changedX' }, { type: 5 }, {}, null, undefined, 'tasks.changed', []];
       return verdict(yes.every((e) => v.shouldRefetch(e) === true) && no.every((e) => v.shouldRefetch(e) === false), json({ yes: yes.map((e) => v.shouldRefetch(e)), no: no.map((e) => v.shouldRefetch(e)) }));
+    },
+  },
+  {
+    // The Teams page can start a team (Nov 26, 2026). A job ends minutes later; the runtime announces it and the page shows the runtime's own sentence.
+    id: 'a-finished-team-job-shows-the-runtimes-own-sentence-with-a-tone-and-nothing-else-does',
+    check() {
+      const v = view();
+      const done = v.jobNotice({ type: 'team.job_finished', data: { kind: 'lead', status: 'done', message: 'The sales team finished.' } });
+      const ticket = v.jobNotice({ type: 'team.job_finished', data: { kind: 'ticket', status: 'needs_founder', message: 'The team needs your decision.' } });
+      const failed = v.jobNotice({ type: 'team.job_finished', data: { kind: 'lead', status: 'failed', message: 'The team is not available right now.' } });
+      const odd = v.jobNotice({ type: 'team.job_finished', data: { kind: 'robot', status: 'mystery', message: `<b>x</b>${'y'.repeat(600)}` } });
+      const none = [undefined, null, 5, 'x', {}, { type: 'tasks.changed' }, { type: 'team.job_finished' }, { type: 'team.job_finished', data: {} }, { type: 'team.job_finished', data: { message: '   ' } }, { type: 'team.job_finished', data: { message: 5 } }].map((e) => v.jobNotice(e));
+      return verdict(done.tone === 'ok' && done.kind === 'lead' && done.message === 'The sales team finished.' && ticket.tone === 'waiting' && ticket.kind === 'ticket' && failed.tone === 'problem'
+        && odd.tone === 'neutral' && odd.kind === 'lead' && odd.message.length === 400 && odd.message.startsWith('<b>x</b>') && none.every((n) => n === null), json({ done, odd: odd.message.length, none }));
+    },
+  },
+  {
+    id: 'the-lead-form-needs-a-company-trims-what-was-typed-and-sends-only-what-was-filled-in',
+    check() {
+      const v = view();
+      const full = v.leadFormView({ company: '  Acme Online Shoes ', website: ' https://acme-shoes.example/ ', email: ' hello@acme-shoes.example ' });
+      const onlyName = v.leadFormView({ company: 'Acme', website: '   ', email: '' });
+      const bad = [undefined, null, 5, 'x', {}, { company: '' }, { company: '   ' }, { company: 5 }, { website: 'https://a.example/' }].map((f) => v.leadFormView(f));
+      return verdict(json(full) === json({ ok: true, args: { company: 'Acme Online Shoes', website: 'https://acme-shoes.example/', email: 'hello@acme-shoes.example' } }) && json(onlyName) === json({ ok: true, args: { company: 'Acme' } })
+        && bad.every((r) => r.ok === false && r.problem === 'Write the company\'s name first.'), json({ full, onlyName, bad }));
+    },
+  },
+  {
+    id: 'the-page-can-start-the-sales-and-support-teams-through-window-api-and-shows-how-it-went',
+    check() {
+      const file = path.join(ROOT, 'src', 'renderer', 'TeamsPanel.jsx');
+      const code = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1') : '';
+      const problems = [];
+      if (!/window\.api\.teams\.startLead/.test(code)) problems.push('does not start the sales team');
+      if (!/window\.api\.teams\.startTicket/.test(code)) problems.push('does not start the support team');
+      if (!/leadFormView/.test(code) || !/jobNotice/.test(code)) problems.push('does not use the checked form and the job sentence');
+      if (!/role="status"/.test(code)) problems.push('does not announce the result');
+      if (/dangerouslySetInnerHTML|innerHTML|setInterval/.test(code)) problems.push('builds markup or polls');
+      if (/\bfetch\(|XMLHttpRequest|WebSocket|localStorage/.test(code)) problems.push('reaches outside window.api');
+      return verdict(problems.length === 0, problems.join('; '));
     },
   },
   {

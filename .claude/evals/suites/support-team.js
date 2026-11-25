@@ -292,6 +292,41 @@ const cases = [
     },
   },
   {
+    // There is no payments tool and nothing that writes to the customer for the founder, so answering a refund card only records the decision.
+    // The founder is told so plainly (Nov 26, 2026), instead of being left to think something happened.
+    id: 'answering-a-refund-discount-complaint-or-legal-card-says-plainly-that-nothing-was-done-and-the-customer-heard-nothing',
+    async check() {
+      const env = await database();
+      const out = {};
+      for (const [tool, answer, words] of [['refund.issue', 'approved', 'a refund'], ['discount.grant', 'rejected', 'a discount'], ['complaint.escalate', 'approved', 'how to handle a complaint'], ['legal.escalate', 'rejected', 'a legal or contract question']]) {
+        const t = await newTicket(env, { subject: `Ticket about ${tool} \u0007 sb_secret_ABCDEFGHIJKLMNOP ${'x'.repeat(200)}`, body: 'A SECRET CUSTOMER MESSAGE that must not be repeated.' });
+        const h = await build({ aria: escalateWith(tool) });
+        const r = await h.support.workTicket({ ticketId: t.id });
+        await h.decisions.resolve({ id: r.decisionId, decision: answer, via: 'dashboard' });
+        const text = await h.support.describeAnswer(await h.decisions.get(r.decisionId));
+        out[tool] = { text, ok: typeof text === 'string' && text.startsWith(`You said ${answer === 'approved' ? 'yes' : 'no'} to ${words} for the ticket from ${t.customer_email}`) && /customer has heard nothing/.test(text) && (answer === 'approved' ? /Nothing has been done yet/.test(text) && /deal with it yourself/.test(text) : /Nothing was done/.test(text))
+          && !text.includes('SECRET CUSTOMER MESSAGE') && !text.includes('sb_secret_') && !/[\u0000-\u001f]/.test(text) && text.length < 400 };
+      }
+      // Cards that are not for the founder to answer about a ticket, or answers that are not a yes or a no, say nothing.
+      const t = await newTicket(env);
+      const h = await build({ aria: escalateWith('refund.issue') });
+      const r = await h.support.workTicket({ ticketId: t.id });
+      const pendingRow = await h.decisions.get(r.decisionId);
+      await h.decisions.resolve({ id: r.decisionId, decision: 'approved', via: 'telegram' });
+      const row = await h.decisions.get(r.decisionId);
+      const nulls = [
+        await h.support.describeAnswer(pendingRow),
+        await h.support.describeAnswer({ ...row, action: { ...row.action, tool: 'outbound.approve_send' } }),
+        await h.support.describeAnswer({ ...row, action: { ...row.action, args: { ticketId: 'not-an-id' } } }),
+        await h.support.describeAnswer({ ...row, action: { ...row.action, args: {} } }),
+        await h.support.describeAnswer({ ...row, id: require('node:crypto').randomUUID() }), // the ticket is escalated on a different card
+        await h.support.describeAnswer({ ...row, status: 'cancelled' }),
+        ...[undefined, null, 5, 'x', [], {}].map((v) => h.support.describeAnswer(v)),
+      ];
+      return verdict(Object.values(out).every((o) => o.ok) && (await Promise.all(nulls)).every((x) => x === null), json({ out: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.ok ? 'ok' : v.text])), nulls: await Promise.all(nulls) }));
+    },
+  },
+  {
     id: 'a-bad-or-unknown-ticket-and-a-team-that-cannot-be-built-run-nothing-and-ask-no-model',
     async check() {
       const env = await database();

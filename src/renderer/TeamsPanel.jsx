@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { overviewView, shouldRefetch } from './teams.mjs';
+import { jobNotice, leadFormView, overviewView, shouldRefetch } from './teams.mjs';
 
 // The Teams page (PLAN.md step 2.5): each team's status, its agents, its open tasks and its blocked tasks with the reason. It is kept live by
 // the runtime's announcements ("tasks.changed") instead of a timer, and it also loads again when the window gets focus and when the founder
@@ -30,6 +30,7 @@ const TEXT_STYLES = {
 function useTeams(ready) {
   const [overview, setOverview] = useState(null);
   const [problem, setProblem] = useState(null);
+  const [notice, setNotice] = useState(null); // what the last start or the last finished job said
   const timer = useRef(null);
 
   const load = useCallback(async () => {
@@ -53,6 +54,8 @@ function useTeams(ready) {
 
   useEffect(() => {
     const unsubscribe = window.api.onEvent((event) => {
+      const ended = jobNotice(event);
+      if (ended) setNotice(ended);
       if (shouldRefetch(event)) loadSoon();
     });
     const onFocus = () => loadSoon();
@@ -64,7 +67,82 @@ function useTeams(ready) {
     };
   }, [loadSoon]);
 
-  return { overview, problem, refresh: loadSoon };
+  return { overview, problem, notice, setNotice, refresh: loadSoon };
+}
+
+const FIELD = 'w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900';
+const BUTTON = 'rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-900 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-50';
+
+/** Start the sales team on a lead, or the support team on the oldest open ticket. A team takes minutes: this only starts it and says so. */
+function StartWork({ setNotice }) {
+  const [company, setCompany] = useState('');
+  const [website, setWebsite] = useState('');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const report = (result) => setNotice(result.ok ? { kind: 'start', message: result.data.message, tone: 'active' } : { kind: 'start', message: result.error.message, tone: 'problem' });
+
+  const startLead = async (event) => {
+    event.preventDefault();
+    const form = leadFormView({ company, website, email });
+    if (!form.ok) {
+      setNotice({ kind: 'start', message: form.problem, tone: 'problem' });
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await window.api.teams.startLead(form.args);
+      report(result);
+      if (result.ok) {
+        setCompany('');
+        setWebsite('');
+        setEmail('');
+      }
+    } catch {
+      setNotice({ kind: 'start', message: 'That could not be started.', tone: 'problem' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startTicket = async () => {
+    setBusy(true);
+    try {
+      report(await window.api.teams.startTicket({}));
+    } catch {
+      setNotice({ kind: 'start', message: 'That could not be started.', tone: 'problem' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="Start work">
+      <h3 className="text-base font-semibold text-slate-900">Start work</h3>
+      <form onSubmit={startLead} className="mt-2 grid gap-2 sm:grid-cols-3">
+        <label className="text-sm text-slate-700">
+          Company
+          <input className={FIELD} value={company} onChange={(e) => setCompany(e.target.value)} maxLength={200} />
+        </label>
+        <label className="text-sm text-slate-700">
+          Their web address (optional)
+          <input className={FIELD} value={website} onChange={(e) => setWebsite(e.target.value)} maxLength={300} placeholder="https://" />
+        </label>
+        <label className="text-sm text-slate-700">
+          Their email (optional)
+          <input className={FIELD} value={email} onChange={(e) => setEmail(e.target.value)} maxLength={200} />
+        </label>
+        <div className="sm:col-span-3 flex flex-wrap gap-2">
+          <button type="submit" disabled={busy} className={BUTTON}>
+            Give the sales team this lead
+          </button>
+          <button type="button" disabled={busy} onClick={startTicket} className={BUTTON}>
+            Work the next open ticket
+          </button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function Team({ view }) {
@@ -137,7 +215,7 @@ function Team({ view }) {
 }
 
 export default function TeamsPanel({ ready }) {
-  const { overview, problem, refresh } = useTeams(ready);
+  const { overview, problem, notice, setNotice, refresh } = useTeams(ready);
   if (!ready) return null;
 
   const page = overview ? overviewView(overview) : null;
@@ -156,6 +234,13 @@ export default function TeamsPanel({ ready }) {
           Refresh
         </button>
       </div>
+
+      <StartWork setNotice={setNotice} />
+      {notice && (
+        <p role="status" className={`mt-2 text-sm ${TEXT_STYLES[notice.tone] ?? TEXT_STYLES.neutral}`}>
+          {notice.message}
+        </p>
+      )}
 
       {problem && <p className="mt-3 text-sm text-red-800">{problem}</p>}
       {!problem && !page && <p className="mt-3 text-sm text-slate-600">Loading…</p>}

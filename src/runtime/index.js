@@ -36,6 +36,7 @@ const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
+const { createTeamJobs } = require('./teams/jobs');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -172,7 +173,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
   const brief = createBrief({ store, decisions });
   const teamsOverview = createTeamsOverview({ store });
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief });
+  // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
+  const jobs = createTeamJobs({ sales, support, emit, onError: () => runtime.emit('teams.error', {}) });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).

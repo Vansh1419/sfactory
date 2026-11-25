@@ -63,13 +63,14 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `google-tools` | `src/runtime/tools/google.js` (read Gmail, make drafts, list and save Drive files; never sends) | 11 | 100% | 2.3 (Gmail and Drive) | pass |
 | `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
 | `ticket-tools` | `src/runtime/tools/tickets.js` (read a ticket a team has taken, record that it was answered), on a real Postgres | 9 | 100% | 2.4 (tickets) | pass |
-| `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 12 | 100% | 2.4 | pass |
+| `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 13 | 100% | 2.4 | pass |
 | `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 8 | 100% | 2.5 | pass |
-| `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 11 | 100% | 2.5 | pass |
+| `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 14 | 100% | 2.5 | pass |
 | `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
+| `team-jobs` | `src/runtime/teams/jobs.js` (starting the sales or support team from the window) | 7 | 100% | 2.x follow-up | pass |
 | `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
-| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 35 | 100% | 1.2 | pass |
+| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 37 | 100% | 1.2 | pass |
 | `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 33 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
@@ -546,7 +547,9 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were each introduced i
 
 Suite: `.claude/evals/suites/runtime-core.js`. No dataset; each case is a check function with an in-memory fake store that records every call. Code under test: `src/runtime/config.js`, `audit.js`, `runtime.js`, `commands.js` and `src/ipc-guard.js`.
 
-**Cases:** 35
+**Cases:** 37
+
+Added Nov 26, 2026: **teams.startLead and teams.startTicket** (the Teams page starts a team) only start the job and answer at once, check their arguments (a bad one is refused before anything is recorded or run), and record the company and only the DOMAIN of an email address in the audit log; without a jobs service they say not available, a refusal keeps its code (busy, invalid lead), and a failure is generic.
 
 Contract: the full contract (function signatures, error codes, the store interface) is in the header of the suite file. Nothing here touches Electron, the network or a real database, so it runs in milliseconds. The Electron wiring (`src/main.js`, `src/ipc.js`, `src/preload.js`) is covered by the `invariants` checks, and by launching the real app (see PLAN.md step 1.2).
 
@@ -645,7 +648,9 @@ Why it exists: the store uses the service key, which bypasses row-level security
 
 Suite: `.claude/evals/suites/support-team.js`. The step 2.4 "done when", on a real Postgres with the migrations. Real: the agent factory and team framework, the repository's tool configuration and skills folders, the policy, the tool loader, the ticket tools, the outbound gate and the decisions service. Scripted: the model, the review agent's verdicts and the card writer.
 
-**Cases:** 12
+**Cases:** 13
+
+Added Nov 26, 2026: **answering a refund, discount, complaint or legal card gives the founder a plain follow-up** (`describeAnswer`): what they decided, that nothing was done (there is no payments tool and nothing that writes to the customer), that the customer has heard nothing, and what is left for them to do; only for the card the ticket is escalated on, never repeating the customer's message, and with control characters and keys removed. Checked by mutation: following up for any card that names a ticket was caught.
 
 Covers: **a routine ticket is answered with a reply that went through the gate (a message from the support team awaiting the founder, with its card) and recorded, and nothing is sent**; **a refund request becomes a pending founder card in the spend category with the customer's message under "Show details", the ticket is marked escalated with that decision, and no message is written to the customer**; a discount (launch or pricing), a complaint and a legal question (legal or public) do the same; the customer's words reach the agent only inside the fenced result of `tickets.get`, never in the task; two runs started together on one ticket answer it once; a run that does not answer, a lead that rejects work that did not answer, and a model that cannot be reached all put the ticket back to open, while a rejection after the reply was already made leaves it answered (not reopened, so the customer is not emailed twice); if the card cannot be made the ticket goes back to open and the result says so; a bad or unknown id and a team without the charter run nothing and ask no model; `workNext` takes the oldest open ticket and says none when there is none; the team's tools are exactly the files list, with `refund.issue`, `discount.grant`, `complaint.escalate` and `legal.escalate` having no tool at all, only an always-ask rule in the right category; its skills are the shared ones plus its own four, and the sales skills are not in them. A worker that sends the reply but forgets `tickets.mark_answered` (a real model did exactly this on Nov 25, 2026) still gets the ticket recorded as answered by the team, using the outbound service's `latestReplyFor`, and the ticket is not reopened. Checked by mutation on Nov 25, 2026: filing the card without marking the ticket escalated was caught. Found while writing it: the lead model writes the worker's instructions, so the task now tells the lead to put the ticket id in them.
 
@@ -663,7 +668,9 @@ Covers: every team is listed in a fixed order with a plain label even when it ha
 
 Suite: `.claude/evals/suites/teams-view.js`. Code under test: `src/renderer/teams.mjs` (plain functions, no React) and the rules for `src/renderer/TeamsPanel.jsx` (read as text).
 
-**Cases:** 11
+**Cases:** 14
+
+Added Nov 26, 2026: **a finished team job shows the runtime's own sentence with a tone**, the lead form needs a company and sends only what was filled in, and the page can start the sales and support teams through `window.api` only, announces the result, and still builds no markup and never polls.
 
 Covers: a team's status says what needs a person first (blocked), then what is being worked on, then what waits, then caught up, no work yet or not started; every task state has a row in plain words and a count cut at its limit shows a plus sign; agents show role and state in plain words and an unknown one is still shown; open tasks say their state, who has them and how long ago they started; a blocked task always shows why; text from the database is passed through as text and never turned into markup; odd or missing fields never throw; the page headline, the order of the teams and the updated label; a `tasks.changed` announcement and the runtime becoming ready mean load again; the page component has no way to build markup from text, **no timer that polls the runtime** (every call is audited), refreshes on announcements, on focus and from a button, and reaches the runtime only through `window.api`; and end to end with the real overview, a change in the data changes what the page shows on the next load. Checked by mutation on Nov 25, 2026: putting "working" above "blocked" and adding a polling timer to the page were each caught.
 
@@ -692,6 +699,14 @@ Suite: `.claude/evals/suites/phase2-gate.js`. The scenario is `scripts/gate2.js`
 **Cases:** 3
 
 Covers, in 22 steps per run: the app starts and the Teams page and brief start empty; **a lead is researched with a web search, saved in the lead list, written up as a proposal email that is reviewed and waits on a card, and nothing is sent**; the card is in plain language, has the email under "Show details", and reaches the phone with Approve and Reject buttons and the window's queue; **a routine ticket is answered through the same gate and recorded; a refund ticket becomes a card in the spend category, the ticket is marked escalated, and the customer is written nothing**; the phone's `/brief` is the same brief the window shows and says what happened; the Teams page matches the data; **one tap approves (the email is sent exactly once with exactly the stored text, and a second send does nothing) or rejects (it can never be sent)**; the refund card is still waiting and no refund ran; audit_log has every step in order and every tool by agent and team; no key appears anywhere; the window was told as it happened; only the fake servers were reached. It is run with the founder approving and again rejecting, and once more from scratch to show it repeats. Checked by mutation on Nov 25, 2026: filing the refund card without marking the ticket escalated, and sending only the headline on the phone's `/brief`, were each caught.
+
+### team-jobs
+
+Suite: `.claude/evals/suites/team-jobs.js`. Code under test: `src/runtime/teams/jobs.js`, with stand-in teams that finish only when the test says so.
+
+**Cases:** 7
+
+Covers: **a lead is started at once with the checked details and how it ended is announced later** (the runtime event `team.job_finished`); a lead with a bad detail (no company, a web address that is not https, two addresses, a price too long, an extra field) is refused with the reason and no team is called; at most two jobs run at once and a slot is free again when one ends; a ticket job takes the oldest open ticket or the one named and an id that is not an id never reaches the team; a missing team says not available and nothing is counted; what the window is told is fixed sentences and the team's own plain reasons, never an error's text; and a team or a listener that throws never leaves a job counted as running. Checked by mutation on Nov 26, 2026: removing the limit of two was caught.
 
 ## Planned evals (not built yet)
 

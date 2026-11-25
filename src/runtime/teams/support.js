@@ -28,11 +28,19 @@ const WORKERS = Object.freeze([
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The four things the team can only ASK the founder about (they have no tool), in the words used when the founder answers.
+const ESCALATION_WORDS = Object.freeze({
+  'refund.issue': 'a refund',
+  'discount.grant': 'a discount',
+  'complaint.escalate': 'how to handle a complaint',
+  'legal.escalate': 'a legal or contract question',
+});
 const MAX_CARD_DETAILS_CHARS = 3_500;
 const MAX_REASON_CHARS = 300;
 const MAX_TITLE_SUBJECT_CHARS = 120;
 
-const oneLine = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+// eslint-disable-next-line no-control-regex
+const oneLine = (v, max) => String(v ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** The task the team is given for one ticket. The customer's words are NOT in it: the worker reads them with tickets.get. */
 function ticketTask(ticketId) {
@@ -178,6 +186,24 @@ function createSupportTeam({ factory, store, decisions, writeCard, outbound, onE
     return result;
   }
 
+  /**
+   * What to tell the founder after they answer a card the support team filed (a refund, a discount, a complaint or a legal question). There is
+   * no payments tool and nothing that writes to the customer for the founder, so an answer only records the decision: this says so plainly and
+   * says what is left for the founder to do. Null for any other card, any other answer, or a card that is not the one the ticket is escalated on.
+   */
+  async function describeAnswer(decision) {
+    const what = ESCALATION_WORDS[decision?.action?.tool];
+    const answer = { approved: 'yes', rejected: 'no' }[decision?.status];
+    const ticketId = decision?.action?.args?.ticketId;
+    if (!what || !answer || typeof ticketId !== 'string' || !UUID.test(ticketId)) return null;
+    const [ticket] = await store.select('tickets', { where: { id: ticketId }, limit: 1 });
+    if (!ticket || ticket.decision_id !== decision.id) return null;
+    const who = `${oneLine(ticket.customer_email, 120)} ("${oneLine(redactDetail(ticket.subject), 80)}")`;
+    return answer === 'yes'
+      ? `You said yes to ${what} for the ticket from ${who}. Nothing has been done yet: the system cannot do this by itself, and the customer has heard nothing. Please deal with it yourself, then write to the customer.`
+      : `You said no to ${what} for the ticket from ${who}. Nothing was done, and the customer has heard nothing. If they should be told, please write to them yourself.`;
+  }
+
   async function workNext() {
     let next;
     try {
@@ -190,7 +216,7 @@ function createSupportTeam({ factory, store, decisions, writeCard, outbound, onE
     return workTicket({ ticketId: next.id });
   }
 
-  return { workTicket, workNext };
+  return { workTicket, workNext, describeAnswer };
 }
 
 module.exports = { createSupportTeam, ticketTask, TEAM, LEAD, WORKERS };

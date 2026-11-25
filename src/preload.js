@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   teams: {
     list: () => invoke('teams.list'),
+    startLead: (args) => invoke('teams.startLead', args),
+    startTicket: (args) => invoke('teams.startTicket', args),
   },
   brief: {
     get: () => invoke('brief.get'),

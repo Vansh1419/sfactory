@@ -221,3 +221,43 @@ test('a failure to report a finished run goes to onError and never throws', asyn
   assert.ok(errors.length >= 1);
   service.stop();
 });
+
+test('a yes or no on a card the support team filed is followed by a plain message, and nothing else is', async () => {
+  const described = [];
+  const support = { describeAnswer: async (row) => { described.push(row.id); return row.id === ID ? 'You said yes to a refund. Nothing has been done yet.' : null; } };
+  const decisions = { get: async (id) => ({ ...pending(), id }), resolve: async () => ({}), remindDue: async () => ({ reminded: 0, failed: 0 }) };
+  const { service, requests, listeners } = setup({ support, decisions });
+  service.start();
+  try {
+    const answered = listeners.get('decision.resolved');
+    await answered({ id: ID, status: 'approved', via: 'telegram' });
+    await answered({ id: '22222222-2222-4222-8222-222222222222', status: 'approved' }); // not one of the support cards: no message
+    await answered({ id: ID, status: 'cancelled' }); // not a yes or a no: not even looked at
+    await answered({ status: 'approved' }); // no id
+    await answered(undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    const sent = requests.filter((r) => r.method === 'sendMessage');
+    assert.equal(sent.length, 1);
+    assert.equal(String(sent[0].body.chat_id), FOUNDER);
+    assert.equal(sent[0].body.text, 'You said yes to a refund. Nothing has been done yet.');
+    assert.deepEqual(described, [ID, '22222222-2222-4222-8222-222222222222']);
+  } finally {
+    service.stop();
+  }
+});
+
+test('a failing follow-up goes to onError and never throws, and stop stops listening for answers', async () => {
+  const support = { describeAnswer: async () => { throw new Error('db down'); } };
+  const { service, listeners, errors } = setup({ support });
+  service.start();
+  await listeners.get('decision.resolved')({ id: ID, status: 'rejected' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  service.stop();
+  assert.equal(listeners.has('decision.resolved'), false);
+  // Without a support team there is nothing to listen for.
+  const plain = setup();
+  plain.service.start();
+  assert.equal(plain.listeners.has('decision.resolved'), false);
+  plain.service.stop();
+});

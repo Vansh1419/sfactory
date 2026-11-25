@@ -114,8 +114,29 @@ export function overviewView(result, now = new Date()) {
   return { ok: true, message: '', teams, headline, updatedLabel: age ? `Updated ${age}` : '' };
 }
 
-/** True when a runtime event means a task or an agent changed (or the runtime has just become ready). */
+/** True when a runtime event means a task or an agent changed (or a team job ended, or the runtime has just become ready). */
 export function shouldRefetch(event) {
   if (!isObject(event) || typeof event.type !== 'string') return false;
-  return event.type === 'tasks.changed' || event.type === 'runtime.ready';
+  return event.type === 'tasks.changed' || event.type === 'team.job_finished' || event.type === 'runtime.ready';
+}
+
+const JOB_TONES = Object.freeze({ done: 'ok', needs_founder: 'waiting', none: 'neutral', blocked: 'problem', failed: 'problem' });
+const MAX_NOTICE_CHARS = 400;
+
+/** What to show when a team job ends: the runtime's own plain sentence and a tone. Null for any other event or one with no sentence. */
+export function jobNotice(event) {
+  if (!isObject(event) || event.type !== 'team.job_finished' || !isObject(event.data)) return null;
+  const message = text(event.data.message).trim().slice(0, MAX_NOTICE_CHARS);
+  if (message === '') return null;
+  return { kind: event.data.kind === 'ticket' ? 'ticket' : 'lead', message, tone: JOB_TONES[event.data.status] ?? 'neutral' };
+}
+
+/** What the founder typed on the lead form, trimmed: the arguments to send, or the one plain problem. The runtime checks everything again. */
+export function leadFormView(form) {
+  const field = (v) => (typeof v === 'string' ? v.trim() : '');
+  const company = field(form?.company);
+  if (company === '') return { ok: false, problem: 'Write the company\'s name first.' };
+  const website = field(form?.website);
+  const email = field(form?.email);
+  return { ok: true, args: { company, ...(website === '' ? {} : { website }), ...(email === '' ? {} : { email }) } };
 }

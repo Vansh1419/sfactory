@@ -72,6 +72,7 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
   const delivered = new Set(); // ids of cards sent to the phone during this run
   let unsubscribe = null;
   let unsubscribeRuns = null;
+  let unsubscribeAnswers = null;
   let reminders = null;
   let stopped = true;
 
@@ -96,6 +97,19 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
     }
   }
 
+  /**
+   * After the founder answers a card the support team filed (a refund, a discount, a complaint, a legal question), say plainly what that does: there is
+   * no payments tool, so the answer only records the decision, and the customer has heard nothing. Never throws.
+   */
+  async function followUpAnswer(id) {
+    try {
+      const text = await support.describeAnswer(await decisions.get(id));
+      if (text) await bot.announce(text);
+    } catch (err) {
+      onError(err);
+    }
+  }
+
   async function pushWaitingCards() {
     try {
       const waiting = await store.select('decisions', { where: { status: 'pending' }, order: 'created_at.asc', limit: MAX_PENDING_ON_START });
@@ -115,6 +129,11 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
     start() {
       stopped = false;
       unsubscribe = runtime.on('decision.created', ({ id }) => deliver(id));
+      if (typeof support?.describeAnswer === 'function') {
+        unsubscribeAnswers = runtime.on('decision.resolved', (event) => {
+          if (event && typeof event.id === 'string' && ['approved', 'rejected'].includes(event.status)) followUpAnswer(event.id);
+        });
+      }
       // A run that ends after the founder's answer (a tap on the phone or a click on the dashboard) is reported here.
       unsubscribeRuns = orchestrator?.onRunFinished?.((result) => bot.announceRun(result).catch(onError)) ?? null;
       reminders = startReminderJob({ service: decisions, notify: notifyReminder, onError });
@@ -130,6 +149,8 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
       stopped = true;
       unsubscribe?.();
       unsubscribeRuns?.();
+      unsubscribeAnswers?.();
+      unsubscribeAnswers = null;
       reminders?.stop();
       digest?.stop();
       digest = null;

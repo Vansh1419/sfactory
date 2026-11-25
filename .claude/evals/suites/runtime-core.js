@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list', 'teams.startLead', 'teams.startTicket']), `got ${json(runtime.commands())}`);
     },
   },
   {
@@ -355,6 +355,39 @@ const cases = [
       const plain = await runtime.invoke('brief.get', {});
       const bad = [await runtime.invoke('brief.get', { date: 'today' }), await runtime.invoke('brief.get', { limit: 5 })];
       return verdict(plain.ok && json(plain.data) === json(brief) && calls === 1 && bad.every((r) => r.error?.code === 'invalid_args') && inserts(store).some((e) => e[1] === 'audit_log' && e[2].action === 'command.brief.get'), `plain ${json(plain)}, calls ${calls}, bad ${json(bad.map((r) => r.error?.code))}`);
+    },
+  },
+  {
+    // teams.startLead and teams.startTicket (Nov 26, 2026) start a team from the Teams page. They only START the job and answer at once.
+    id: 'teams-start-lead-and-ticket-start-the-job-at-once-check-their-arguments-and-record-only-the-domain-of-an-email',
+    async check() {
+      const lead = [];
+      const ticket = [];
+      const jobs = {
+        startLead(input) { lead.push(input); return { ok: true, message: 'Started.' }; },
+        startTicket(input) { ticket.push(input); return { ok: true, message: 'Started.' }; },
+      };
+      const { store, runtime } = setupWithCommands({}, { jobs });
+      const a = await runtime.invoke('teams.startLead', { company: 'Acme Online Shoes', website: 'https://acme-shoes.example/', email: 'hello@acme-shoes.example' });
+      const b = await runtime.invoke('teams.startTicket', {});
+      const c = await runtime.invoke('teams.startTicket', { ticketId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
+      const bad = [
+        await runtime.invoke('teams.startLead', {}), await runtime.invoke('teams.startLead', { company: 5 }), await runtime.invoke('teams.startLead', { company: 'x'.repeat(201) }), await runtime.invoke('teams.startLead', { company: 'A', email: 5 }),
+        await runtime.invoke('teams.startLead', { company: 'A', status: 'active' }), await runtime.invoke('teams.startTicket', { ticketId: 'nope' }), await runtime.invoke('teams.startTicket', { ticketId: 5 }), await runtime.invoke('teams.startTicket', { limit: 5 }),
+      ];
+      const audited = inserts(store).filter((e) => e[1] === 'audit_log' && /^command\.teams\.start/.test(e[2].action)).map((e) => JSON.stringify(e[2].detail));
+      return verdict(a.ok && a.data.started === true && b.ok && c.ok && lead.length === 1 && lead[0].company === 'Acme Online Shoes' && ticket.length === 2 && ticket[1].ticketId === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        && bad.every((r) => r.error?.code === 'invalid_args') && lead.length === 1 && audited.length === 3 /* only the three valid calls: a request that fails its checks is refused before anything is recorded or run */ && audited.some((d) => d.includes('acme-shoes.example')) && !audited.join(' ').includes('hello@acme-shoes.example'), `a ${json(a)}; bad ${json(bad.map((r) => r.error?.code))}; audited ${json(audited.slice(0, 2))}`);
+    },
+  },
+  {
+    id: 'teams-start-without-a-jobs-service-says-not-available-and-a-refusal-keeps-its-code-and-a-failure-is-generic',
+    async check() {
+      const none = [await setupWithCommands().runtime.invoke('teams.startLead', { company: 'Acme' }), await setupWithCommands().runtime.invoke('teams.startTicket', {})];
+      const refusing = setupWithCommands({}, { jobs: { startLead: () => ({ ok: false, code: 'busy', message: '2 team jobs are already running. Please wait for one to finish.' }), startTicket: () => ({ ok: false, code: 'invalid_lead', message: 'x' }) } });
+      const busy = await refusing.runtime.invoke('teams.startLead', { company: 'Acme' });
+      const failing = await setupWithCommands({}, { jobs: { startLead() { throw new Error('connection to db.internal failed SECRETVALUE7'); } } }).runtime.invoke('teams.startLead', { company: 'Acme' });
+      return verdict(none.every((r) => r.error?.code === 'not_available') && busy.error?.code === 'busy' && /2 team jobs are already running/.test(busy.error.message) && failing.error?.code === 'internal_error' && !json(failing).includes('SECRETVALUE7') && !json(failing).includes('db.internal'), json({ none, busy, failing }));
     },
   },
   {
