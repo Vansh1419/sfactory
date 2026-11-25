@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { jobNotice, leadFormView, overviewView, shouldRefetch } from './teams.mjs';
+import { jobNotice, leadFormView, overviewView, shouldRefetch, taskFormView } from './teams.mjs';
 
 // The Teams page (PLAN.md step 2.5): each team's status, its agents, its open tasks and its blocked tasks with the reason. It is kept live by
 // the runtime's announcements ("tasks.changed") instead of a timer, and it also loads again when the window gets focus and when the founder
@@ -72,6 +72,83 @@ function useTeams(ready) {
 
 const FIELD = 'w-full rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900';
 const BUTTON = 'rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-900 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-50';
+
+/** Give the Finance, Legal and Ops team or the Engineering team a task. Engineering works inside one project, so it needs one; finance may have one. */
+function TaskForms({ setNotice }) {
+  const [projects, setProjects] = useState([]);
+  const [finance, setFinance] = useState({ title: '', description: '', podId: '' });
+  const [engineer, setEngineer] = useState({ title: '', description: '', podId: '' });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    window.api.files.pods().then((result) => {
+      if (result.ok) setProjects(result.data.pods);
+    }).catch(() => {});
+  }, []);
+
+  const start = async (event, form, needsProject, run, reset) => {
+    event.preventDefault();
+    const checked = taskFormView(form, { needsProject });
+    if (!checked.ok) {
+      setNotice({ kind: 'start', message: checked.problem, tone: 'problem' });
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await run(checked.args);
+      setNotice(result.ok ? { kind: 'start', message: result.data.message, tone: 'active' } : { kind: 'start', message: result.error.message, tone: 'problem' });
+      if (result.ok) reset();
+    } catch {
+      setNotice({ kind: 'start', message: 'That could not be started.', tone: 'problem' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const picker = (form, setForm, optional) => (
+    <label className="text-sm text-slate-700">
+      {optional ? 'Project (optional)' : 'Project'}
+      <select className={FIELD} value={form.podId} onChange={(e) => setForm({ ...form, podId: e.target.value })}>
+        <option value="">{optional ? 'The company (no project)' : 'Pick a project'}</option>
+        {projects.map((p) => <option key={p.id} value={p.id}>{`${p.name} (${p.priority})`}</option>)}
+      </select>
+    </label>
+  );
+
+  return (
+    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <form onSubmit={(e) => start(e, finance, false, (args) => window.api.teams.startFinance(args), () => setFinance({ title: '', description: '', podId: '' }))} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="Finance task">
+        <h3 className="text-base font-semibold text-slate-900">Finance, Legal and Ops task</h3>
+        <p className="mt-1 text-xs text-slate-600">An invoice draft, an expense, a contract to read. Nothing is paid, signed or sent.</p>
+        <label className="mt-2 block text-sm text-slate-700">
+          What should it do?
+          <input className={FIELD} value={finance.title} onChange={(e) => setFinance({ ...finance, title: e.target.value })} maxLength={200} />
+        </label>
+        <label className="mt-2 block text-sm text-slate-700">
+          Details (optional)
+          <textarea className={FIELD} rows={2} value={finance.description} onChange={(e) => setFinance({ ...finance, description: e.target.value })} maxLength={4000} />
+        </label>
+        <div className="mt-2">{picker(finance, setFinance, true)}</div>
+        <button type="submit" disabled={busy} className={`${BUTTON} mt-2`}>Give the finance team this task</button>
+      </form>
+
+      <form onSubmit={(e) => start(e, engineer, true, (args) => window.api.teams.startEngineer(args), () => setEngineer({ title: '', description: '', podId: '' }))} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="Engineering task">
+        <h3 className="text-base font-semibold text-slate-900">Engineering task</h3>
+        <p className="mt-1 text-xs text-slate-600">It works on a branch and opens a pull request. A merge or a deploy is always your decision.</p>
+        <label className="mt-2 block text-sm text-slate-700">
+          What should it do?
+          <input className={FIELD} value={engineer.title} onChange={(e) => setEngineer({ ...engineer, title: e.target.value })} maxLength={200} />
+        </label>
+        <label className="mt-2 block text-sm text-slate-700">
+          Details (optional)
+          <textarea className={FIELD} rows={2} value={engineer.description} onChange={(e) => setEngineer({ ...engineer, description: e.target.value })} maxLength={4000} />
+        </label>
+        <div className="mt-2">{picker(engineer, setEngineer, false)}</div>
+        <button type="submit" disabled={busy} className={`${BUTTON} mt-2`}>Give the engineering team this task</button>
+      </form>
+    </div>
+  );
+}
 
 /** Start the sales team on a lead, or the support team on the oldest open ticket. A team takes minutes: this only starts it and says so. */
 function StartWork({ setNotice }) {
@@ -236,6 +313,8 @@ export default function TeamsPanel({ ready }) {
       </div>
 
       <StartWork setNotice={setNotice} />
+
+      <TaskForms setNotice={setNotice} />
       {notice && (
         <p role="status" className={`mt-2 text-sm ${TEXT_STYLES[notice.tone] ?? TEXT_STYLES.neutral}`}>
           {notice.message}

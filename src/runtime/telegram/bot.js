@@ -50,6 +50,8 @@ const HELP = [
   '/goal <what you want done> - give the team a goal',
   '/lead <company> [https://their-site] [their-email] - give the sales team a lead to research',
   '/ticket [ticket id] - give the support team the oldest open ticket (or the one you name)',
+  '/finance [project |] <what to do> - give the finance team a task (an invoice draft, an expense, a contract to read)',
+  '/engineer <project> | <what to do> - give the engineering team a task inside one project',
   '/brief - today\'s brief (leads, tickets, spend requests and what is waiting for you)',
   '/status [team] - how the teams are doing (try /status sales or /status support)',
   '/pause <agent> - pause an agent (not available yet)',
@@ -71,6 +73,9 @@ const GOAL_USAGE = 'Usage: /goal <what you want done>\nFor example: /goal Buy a 
 const MAX_TEAM_RUNS_AT_ONCE = 2;
 const LEAD_USAGE = 'Usage: /lead <company> [https://their-site] [their-email]\nFor example: /lead Acme Online Shoes https://acme-shoes.example hello@acme-shoes.example';
 const TICKET_USAGE = 'Usage: /ticket (the oldest open ticket) or /ticket <ticket id>';
+const FINANCE_USAGE = 'Usage: /finance <what to do> or /finance <project> | <what to do>\nFor example: /finance Alpha | Invoice the client for the website design';
+const ENGINEER_USAGE = 'Usage: /engineer <project> | <what to do>\nFor example: /engineer Alpha | Add a contact page';
+const MAX_TASK_TITLE_CHARS = 200;
 const EMAIL_WORD = /^[^\s@,;<>()[\]\\]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$/;
 const TEAM_REASONS = Object.freeze({
   team_unavailable: 'The team is not available right now.',
@@ -181,7 +186,7 @@ function describeRule(rule) {
   return rule.status === 'proposed' ? `${base} - waiting for your Yes` : base;
 }
 
-function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, onError = () => {} }) {
+function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, statusText, sales, support, engineering, finance, projects, onError = () => {} }) {
   const founder = Number(founderChatId);
   const reply = (text, buttons) => api.sendMessage({ chatId: founder, text, buttons });
   const toast = (callbackId, text) => api.answerCallback({ id: callbackId, text: clip(text, MAX_TOAST_CHARS) });
@@ -244,10 +249,14 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
   function describeTeamRun(kind, result) {
     switch (result?.status) {
       case 'done':
+        if (kind === 'finance') return 'The Finance, Legal and Ops team finished. If it drafted an invoice or a record, the draft is in its task. Nothing was paid, signed or sent.';
+        if (kind === 'engineering') return 'The Engineering team finished. If it opened a pull request, it is waiting on GitHub for a person to merge it. Nothing went live.';
         return kind === 'lead'
           ? 'The sales team finished. If it wrote a proposal email, it is waiting for you as a card in this chat. If there is no card, it decided not to write one.'
           : 'The support team answered the ticket. The reply is waiting for you as a card in this chat. Nothing was sent to the customer.';
       case 'needs_founder':
+        if (kind === 'finance') return 'The team needs your decision on something. The card is in this chat. Nothing was paid, signed or sent.';
+        if (kind === 'engineering') return 'The team needs your decision on something. The card is in this chat. Nothing was merged and nothing went live.';
         return 'The team needs your decision on something. The card is in this chat. Nothing was sent to anyone.';
       case 'none':
         return 'There are no open tickets.';
@@ -282,7 +291,8 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
     if (teamRuns >= MAX_TEAM_RUNS_AT_ONCE) return reply(`I am already running ${MAX_TEAM_RUNS_AT_ONCE} team jobs. Please wait for one to finish.`);
     teamRuns += 1;
     runTeam(kind, run); // not awaited on purpose: a team takes minutes, and taps must not wait behind it
-    return reply(kind === 'lead' ? 'Working on it. I will message you here when the sales team has finished, and any email it writes arrives as a card.' : 'Working on it. I will message you here when the support team has finished, and its reply arrives as a card.');
+    const who = { lead: 'the sales team', finance: 'the finance team', engineering: 'the engineering team' }[kind] ?? 'the support team';
+    return reply(`Working on it. I will message you here when ${who} has finished.${kind === 'lead' ? ' Any email it writes arrives as a card.' : kind === 'ticket' ? ' Its reply arrives as a card.' : ' Anything it needs from you arrives as a card.'}`);
   }
 
   async function startLead(rest) {
@@ -298,6 +308,55 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
     if (id === '') return startTeamRun('ticket', () => support.workNext());
     if (!UUID.test(id)) return reply(TICKET_USAGE);
     return startTeamRun('ticket', () => support.workTicket({ ticketId: id }));
+  }
+
+  /** An open project named in words: the whole name or a part of it, in any case. One match is the project; none or several is said plainly. */
+  async function findProject(words) {
+    const wanted = words.trim().toLowerCase();
+    if (wanted === '') return { ok: false, text: ENGINEER_USAGE };
+    let open;
+    try {
+      open = typeof projects === 'function' ? await projects() : null;
+    } catch (err) {
+      onError(err);
+      return { ok: false, text: GENERIC_ERROR };
+    }
+    if (!Array.isArray(open)) return { ok: false, text: 'Projects are not available right now.' };
+    const name = (p) => String(p.name ?? '');
+    const exact = open.filter((p) => name(p).toLowerCase() === wanted);
+    const found = exact.length > 0 ? exact : open.filter((p) => name(p).toLowerCase().includes(wanted));
+    const shown = clip(words.trim().replace(/[\u0000-\u001f\u007f]/g, ' '), 60);
+    if (found.length === 0) return { ok: false, text: `I could not find an open project called "${shown}". Open projects: ${open.map(name).slice(0, 10).join(', ') || 'none'}.` };
+    if (found.length > 1) return { ok: false, text: `"${shown}" matches more than one open project: ${found.map(name).slice(0, 10).join(', ')}. Please write more of the name.` };
+    return { ok: true, podId: found[0].id };
+  }
+
+  /** "project | what to do", or only "what to do" when the project is optional. */
+  function splitTask(rest) {
+    const text = String(rest ?? '').trim();
+    const bar = text.indexOf('|');
+    return bar === -1 ? { project: null, title: text } : { project: text.slice(0, bar).trim(), title: text.slice(bar + 1).trim() };
+  }
+
+  async function startFinance(rest) {
+    if (!finance) return reply('The finance team is not available right now.');
+    const { project, title } = splitTask(rest);
+    if (title === '' || (project !== null && project === '')) return reply(FINANCE_USAGE);
+    if (title.length > MAX_TASK_TITLE_CHARS) return reply(`That is too long for a title. Please keep it under ${MAX_TASK_TITLE_CHARS} characters.`);
+    if (project === null) return startTeamRun('finance', () => finance.workTask({ title }));
+    const found = await findProject(project);
+    if (!found.ok) return reply(found.text);
+    return startTeamRun('finance', () => finance.workTask({ podId: found.podId, title }));
+  }
+
+  async function startEngineer(rest) {
+    if (!engineering) return reply('The engineering team is not available right now.');
+    const { project, title } = splitTask(rest);
+    if (project === null || project === '' || title === '') return reply(ENGINEER_USAGE);
+    if (title.length > MAX_TASK_TITLE_CHARS) return reply(`That is too long for a title. Please keep it under ${MAX_TASK_TITLE_CHARS} characters.`);
+    const found = await findProject(project);
+    if (!found.ok) return reply(found.text);
+    return startTeamRun('engineering', () => engineering.workTask({ podId: found.podId, title }));
   }
 
   // ---- goals ----------------------------------------------------------------------------
@@ -341,6 +400,10 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, b
         return startLead(rest);
       case 'ticket':
         return startTicket(rest);
+      case 'finance':
+        return startFinance(rest);
+      case 'engineer':
+        return startEngineer(rest);
       case 'brief':
         // The same text the morning digest sends and the window shows (brief.js builds it from the brief's own lines).
         return reply(typeof briefText === 'function' ? await briefText() : BRIEF_UNAVAILABLE);

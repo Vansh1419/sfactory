@@ -2,9 +2,11 @@
 
 // Starting a team from the window (PLAN.md Phase 2 follow-up). Graded by the `team-jobs` eval.
 //
-//   createTeamJobs({ sales, support, emit?, onError?, maxAtOnce? })
+//   createTeamJobs({ sales, support, engineering?, finance?, emit?, onError?, maxAtOnce? })
 //     .startLead({ company, website?, email?, price? }) -> { ok: true, message } | { ok: false, code, message }
 //     .startTicket({ ticketId? })                       -> the same: the oldest open ticket, or the one named
+//     .startFinance({ title, description?, podId? })    -> the same: a task for the Finance, Legal and Ops team (a project's, or the company's)
+//     .startEngineer({ podId, title, description? })    -> the same: a task for the Engineering team inside ONE project
 //
 // A team takes minutes, so a job is STARTED here and the answer comes back at once ("started", or why not); how it ended is announced later as the
 // runtime event `team.job_finished` { kind, status, message }, which the window shows. Whatever the team writes for the founder (a proposal email, a
@@ -16,6 +18,8 @@
 //     goes to onError and becomes one generic sentence
 
 const { checkLead } = require('./marketing-sales');
+const { checkTask: checkFinanceTask } = require('./finance-legal-ops');
+const { checkTask: checkEngineeringTask } = require('./engineering');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_AT_ONCE = 2;
@@ -36,10 +40,14 @@ const clip = (text) => (text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_M
 function describe(kind, result) {
   switch (result?.status) {
     case 'done':
+      if (kind === 'finance') return 'The Finance, Legal and Ops team finished. If it drafted an invoice or a record, the draft is in its task. Nothing was paid, signed or sent.';
+      if (kind === 'engineering') return 'The Engineering team finished. If it opened a pull request, it is waiting on GitHub for a person to merge it. Nothing went live.';
       return kind === 'lead'
         ? 'The sales team finished. If it wrote a proposal email, it is waiting for you as a card. If there is no card, it decided not to write one.'
         : 'The support team answered the ticket. The reply is waiting for you as a card. Nothing was sent to the customer.';
     case 'needs_founder':
+      if (kind === 'finance') return 'The team needs your decision on something. The card is waiting for you. Nothing was paid, signed or sent.';
+      if (kind === 'engineering') return 'The team needs your decision on something. The card is waiting for you. Nothing was merged and nothing went live.';
       return 'The team needs your decision on something. The card is waiting for you. Nothing was sent to anyone.';
     case 'none':
       return 'There are no open tickets.';
@@ -53,7 +61,7 @@ function describe(kind, result) {
   }
 }
 
-function createTeamJobs({ sales, support, emit = () => {}, onError = () => {}, maxAtOnce = MAX_AT_ONCE } = {}) {
+function createTeamJobs({ sales, support, engineering, finance, emit = () => {}, onError = () => {}, maxAtOnce = MAX_AT_ONCE } = {}) {
   let running = 0;
 
   const announce = (kind, result) => {
@@ -102,6 +110,24 @@ function createTeamJobs({ sales, support, emit = () => {}, onError = () => {}, m
       if (running >= maxAtOnce) return busy();
       launch('ticket', () => (ticketId === undefined ? support.workNext() : support.workTicket({ ticketId })));
       return { ok: true, message: 'Started. The support team is working on it. Its reply arrives as a card, and the result shows here.' };
+    },
+
+    startFinance(input) {
+      if (!finance || typeof finance.workTask !== 'function') return { ok: false, code: 'not_available', message: 'The finance team is not available right now.' };
+      const checked = checkFinanceTask(input);
+      if (!checked.ok) return { ok: false, code: 'invalid_task', message: clip(`That task could not be used. ${checked.problems.join(' ')}`) };
+      if (running >= maxAtOnce) return busy();
+      launch('finance', () => finance.workTask(checked.task));
+      return { ok: true, message: 'Started. The finance team is working on it. Anything it needs from you arrives as a card, and the result shows here.' };
+    },
+
+    startEngineer(input) {
+      if (!engineering || typeof engineering.workTask !== 'function') return { ok: false, code: 'not_available', message: 'The engineering team is not available right now.' };
+      const checked = checkEngineeringTask(input);
+      if (!checked.ok) return { ok: false, code: 'invalid_task', message: clip(`That task could not be used. ${checked.problems.join(' ')}`) };
+      if (running >= maxAtOnce) return busy();
+      launch('engineering', () => engineering.workTask({ podId: checked.task.podId, title: checked.task.title, ...(checked.task.description === '' ? {} : { description: checked.task.description }) }));
+      return { ok: true, message: 'Started. The engineering team is working on it inside that project. A merge or a deploy arrives as a card, and the result shows here.' };
     },
 
     running: () => running,

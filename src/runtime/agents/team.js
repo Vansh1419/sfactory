@@ -2,7 +2,7 @@
 
 // A team: one lead and its workers (PLAN.md step 2.1). Graded by the `team-framework` eval.
 //
-//   runTask({ title, description }) -> { status: 'done', taskId, outputs }
+//   runTask({ title, description, podId?, resumeTaskId?, resumeNote? }) -> { status: 'done', taskId, outputs }
 //                                    | { status: 'blocked', taskId, reason }
 //                                    | { status: 'needs_founder', taskId, request }
 //                                    | { status: 'failed', reason, taskId? }
@@ -118,8 +118,15 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange,
       if (!pod) return { status: 'failed', reason: 'bad_pod' };
     }
 
-    const taskId = crypto.randomUUID();
-    let current = null;
+    // A task that was blocked on a card the founder has now approved carries on in its OWN row (step 3.x follow-up): no new row is made, and the
+    // caller has already moved the row from blocked back to queued.
+    const resumeId = request.resumeTaskId;
+    if (resumeId !== undefined && !(typeof resumeId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resumeId))) return { status: 'failed', reason: 'bad_task' };
+    // On a resumed task the founder's approval is explained to EVERY worker, not only to the lead who plans.
+    const resumeNote = request.resumeNote;
+    if (resumeNote !== undefined && !(typeof resumeNote === 'string' && resumeNote.length <= 1500)) return { status: 'failed', reason: 'bad_task' };
+    const taskId = resumeId ?? crypto.randomUUID();
+    let current = resumeId ? 'queued' : null;
 
     /** Audit first, then change. */
     async function record(action, detail) {
@@ -147,13 +154,15 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange,
     }
 
     try {
-      await record('task.created', { title });
-      try {
-        await store.insert('tasks', { id: taskId, team, title, description, status: 'queued', created_by_agent_id: lead.id, assigned_agent_id: lead.id, ...(podId ? { pod_id: podId.toLowerCase() } : {}) });
-      } catch {
-        throw new TeamError('store_failed');
+      if (!resumeId) {
+        await record('task.created', { title });
+        try {
+          await store.insert('tasks', { id: taskId, team, title, description, status: 'queued', created_by_agent_id: lead.id, assigned_agent_id: lead.id, ...(podId ? { pod_id: podId.toLowerCase() } : {}) });
+        } catch {
+          throw new TeamError('store_failed');
+        }
+        current = 'queued';
       }
-      current = 'queued';
       changed();
 
       const planned = await busy(lead, () => lead.plan({ taskId, title, description: description ?? '' }));
@@ -166,7 +175,7 @@ function createTeam({ team, lead, workers, store, audit, maxRevisions, onChange,
         for (let attempt = 0; ; attempt += 1) {
           if (current !== 'in_progress') await setStatus('in_progress', { assigned_agent_id: worker.id, ...(outputs.length === 0 && attempt === 0 ? { started_at: new Date().toISOString() } : {}) }, { worker: worker.name });
 
-          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, rowId: taskId, title: subtask.title, instructions: subtask.instructions, ...(feedback ? { feedback } : {}), ...(podId ? { podId: podId.toLowerCase() } : {}) }));
+          const result = await busy(worker, () => worker.run({ taskId: `${taskId}-${index}-${attempt}`, rowId: taskId, title: subtask.title, instructions: resumeNote ? `${subtask.instructions}\n\n${resumeNote}` : subtask.instructions, ...(feedback ? { feedback } : {}), ...(podId ? { podId: podId.toLowerCase() } : {}) }));
           if (result.status === 'needs_founder') return await block('This needs the founder to decide first, so the task is waiting.', { status: 'needs_founder', request: result.request });
           if (result.status !== 'done') return await block(WORKER_STOPPED[result.reason] ?? 'The worker could not finish.');
 

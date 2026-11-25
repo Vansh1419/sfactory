@@ -101,7 +101,7 @@ function createFinanceTeam({ factory, decisions, writeCard, onError = () => {} }
     try {
       const action = { tool: request.tool, access: request.access, args: request.args ?? {} };
       const card = await writeCard({ task: { id: taskId, title: task.title }, category: request.category, action });
-      const filed = await decisions.create({ action, card, ...(task.podId === undefined ? {} : { podId: task.podId }) });
+      const filed = await decisions.create({ action, card, taskId, ...(task.podId === undefined ? {} : { podId: task.podId }) });
       return filed.id;
     } catch (err) {
       onError(err);
@@ -109,11 +109,8 @@ function createFinanceTeam({ factory, decisions, writeCard, onError = () => {} }
     }
   }
 
-  async function workTask(input) {
-    const checked = checkTask(input);
-    if (!checked.ok) return { status: 'failed', reason: 'bad_task', problems: checked.problems };
-    const task = financeTask(checked.task);
-
+  /** Run one prepared task through the team (a new task, or `resumeTaskId`'s own row carrying on). */
+  async function run(task, resumeTaskId, resumeNote) {
     let built;
     try {
       built = await ensureTeam();
@@ -125,7 +122,7 @@ function createFinanceTeam({ factory, decisions, writeCard, onError = () => {} }
 
     let result;
     try {
-      result = await built.team.runTask(task);
+      result = await built.team.runTask(resumeTaskId ? { ...task, resumeTaskId, ...(resumeNote ? { resumeNote } : {}) } : task);
     } catch (err) {
       onError(err);
       return { status: 'failed', reason: 'error' };
@@ -139,6 +136,25 @@ function createFinanceTeam({ factory, decisions, writeCard, onError = () => {} }
     return result;
   }
 
+  async function workTask(input) {
+    const checked = checkTask(input);
+    if (!checked.ok) return { status: 'failed', reason: 'bad_task', problems: checked.problems };
+    return run(financeTask(checked.task));
+  }
+
+  /**
+   * Carry on with a task that was blocked on a card the founder has now APPROVED (it keeps its own row). The approval is only the founder's answer: the team is
+   * told so, that nothing was paid, signed or issued by it, and to finish the rest and say what is left for a person. Called by the task resumer, never by an agent.
+   */
+  async function resume(input) {
+    const known = isObject(input) && typeof input.taskId === 'string' && UUID.test(input.taskId) && typeof input.title === 'string' && input.title.trim() !== '' && Object.hasOwn(ASKED_ABOUT, input.approvedTool)
+      && (input.podId === undefined || (typeof input.podId === 'string' && UUID.test(input.podId)));
+    if (!known) return { status: 'failed', reason: 'bad_task' };
+    const original = typeof input.description === 'string' ? input.description.trim().slice(0, 9000) : '';
+    const note = `The founder approved this on their card (${ASKED_ABOUT[input.approvedTool].about}). That approval is only their answer. Nothing was paid, signed or issued by it, and you have no tool that does any of those. Carry on with the rest of the task, and in your report say what is still left for a person to do.`;
+    return run({ title: input.title.trim(), description: original || 'No further details were given.', ...(input.podId === undefined ? {} : { podId: input.podId.toLowerCase() }) }, input.taskId.toLowerCase(), note);
+  }
+
   /**
    * After the founder answers a card this team filed (a payout, a signature, a legal document or a legal question), say plainly what that did: nothing,
    * because the team has no tool for any of them. Null for any other card or answer, and for a support card (those name a ticket).
@@ -147,12 +163,13 @@ function createFinanceTeam({ factory, decisions, writeCard, onError = () => {} }
     if (!isObject(decision) || !isObject(decision.action) || !Object.hasOwn(ASKED_ABOUT, decision.action.tool)) return null;
     if (isObject(decision.action.args) && decision.action.args.ticketId !== undefined) return null;
     const { about, nothing } = ASKED_ABOUT[decision.action.tool];
+    if (decision.status === 'approved' && decision.task_id) return `You approved the card about ${about}. ${nothing} The team is picking the task up again to finish the rest, and will tell you if it needs you.`;
     if (decision.status === 'approved') return `You approved the card about ${about}. ${nothing}`;
     if (decision.status === 'rejected') return `You said no to the card about ${about}. Nothing was done, and nothing will be unless you ask again.`;
     return null;
   }
 
-  return { workTask, describeAnswer };
+  return { workTask, resume, describeAnswer };
 }
 
 module.exports = { createFinanceTeam, checkTask, financeTask, TEAM, LEAD, WORKERS };

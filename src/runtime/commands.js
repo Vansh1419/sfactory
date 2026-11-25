@@ -158,6 +158,45 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
     },
   });
 
+  // Start the Finance, Legal and Ops team or the Engineering team from the Teams page (the same way as a lead or a ticket). The details are checked again
+  // by the jobs service. The audit log records the title (cut) and whether there was a description, never the description itself.
+  const jobTitle = (v) => String(v).slice(0, 80);
+  runtime.register('teams.startFinance', {
+    validate(args) {
+      const extra = unknownKey(args, ['title', 'description', 'podId']);
+      if (extra) return extra;
+      if (!text(args.title, 200)) return 'title must be text';
+      if (args.description !== undefined && !text(args.description, 4000)) return 'description must be text';
+      if (args.podId !== undefined && !(typeof args.podId === 'string' && UUID.test(args.podId))) return 'podId must be a project id';
+      return null;
+    },
+    auditArgs: (args) => ({ title: jobTitle(args.title), hasDescription: args.description !== undefined, ...(args.podId === undefined ? {} : { podId: args.podId }) }),
+    handler: async (args) => {
+      if (!jobs) throw new CommandError('not_available', 'The teams are not available right now.');
+      const started = jobs.startFinance(args);
+      if (!started.ok) throw new CommandError(started.code, started.message);
+      return { started: true, message: started.message };
+    },
+  });
+
+  runtime.register('teams.startEngineer', {
+    validate(args) {
+      const extra = unknownKey(args, ['podId', 'title', 'description']);
+      if (extra) return extra;
+      if (!(typeof args.podId === 'string' && UUID.test(args.podId))) return 'podId must be a project id';
+      if (!text(args.title, 200)) return 'title must be text';
+      if (args.description !== undefined && !text(args.description, 4000)) return 'description must be text';
+      return null;
+    },
+    auditArgs: (args) => ({ podId: args.podId, title: jobTitle(args.title), hasDescription: args.description !== undefined }),
+    handler: async (args) => {
+      if (!jobs) throw new CommandError('not_available', 'The teams are not available right now.');
+      const started = jobs.startEngineer(args);
+      if (!started.ok) throw new CommandError(started.code, started.message);
+      return { started: true, message: started.message };
+    },
+  });
+
   // Today's brief, for the window's Brief panel (step 2.6): the same lines Telegram's /brief and the morning digest send. Read only, takes no
   // options, audited like every other command (the panel loads once, on focus and when the founder presses Refresh, never on a timer).
   runtime.register('brief.get', {

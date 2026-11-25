@@ -128,7 +128,7 @@ export function jobNotice(event) {
   if (!isObject(event) || event.type !== 'team.job_finished' || !isObject(event.data)) return null;
   const message = text(event.data.message).trim().slice(0, MAX_NOTICE_CHARS);
   if (message === '') return null;
-  return { kind: event.data.kind === 'ticket' ? 'ticket' : 'lead', message, tone: JOB_TONES[event.data.status] ?? 'neutral' };
+  return { kind: ['ticket', 'finance', 'engineering'].includes(event.data.kind) ? event.data.kind : 'lead', message, tone: JOB_TONES[event.data.status] ?? 'neutral' };
 }
 
 /** What the founder typed on the lead form, trimmed: the arguments to send, or the one plain problem. The runtime checks everything again. */
@@ -139,4 +139,18 @@ export function leadFormView(form) {
   const website = field(form?.website);
   const email = field(form?.email);
   return { ok: true, args: { company, ...(website === '' ? {} : { website }), ...(email === '' ? {} : { email }) } };
+}
+
+/**
+ * What the founder typed on the Finance or Engineering form, trimmed: the arguments to send, or the one plain problem. The Engineering form needs a
+ * project (`needsProject`); the Finance form may have one. The runtime checks everything again.
+ */
+export function taskFormView(form, { needsProject = false } = {}) {
+  const field = (v) => (typeof v === 'string' ? v.trim() : '');
+  const title = field(form?.title);
+  if (title === '') return { ok: false, problem: 'Write what the team should do first.' };
+  const podId = field(form?.podId);
+  if (needsProject && podId === '') return { ok: false, problem: 'Pick the project first.' };
+  const description = field(form?.description);
+  return { ok: true, args: { ...(needsProject || podId !== '' ? { podId } : {}), title, ...(description === '' ? {} : { description }) } };
 }

@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => invoke('teams.list'),
     startLead: (args) => invoke('teams.startLead', args),
     startTicket: (args) => invoke('teams.startTicket', args),
+    startFinance: (args) => invoke('teams.startFinance', args),
+    startEngineer: (args) => invoke('teams.startEngineer', args),
   },
   brief: {
     get: () => invoke('brief.get'),

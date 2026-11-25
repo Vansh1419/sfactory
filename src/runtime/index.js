@@ -46,6 +46,7 @@ const { createFinanceTeam } = require('./teams/finance-legal-ops');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
+const { createTaskResumer } = require('./teams/resume');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
 const { createPodFiles } = require('./pods/files');
@@ -73,7 +74,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -206,6 +207,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const engineering = createEngineeringTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('engineering.error', {}) });
   // The Finance, Legal and Ops team (step 3.4): drafts invoices and reads contracts; a payout, a signature or a legal document becomes a founder card (tied to the pod when there is one).
   const finance = createFinanceTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('finance.error', {}) });
+  // A task blocked on a card carries on after the founder APPROVES that card (Option B): the same task goes back in the queue and its team finishes the rest,
+  // told that the approval itself did nothing (there is no tool that merges, deploys, pays or signs). It starts and stops with the runtime.
+  const taskResumer = createTaskResumer({ store, audit, decisions, runtime, teams: { product_engineering: engineering, finance_legal_ops: finance }, emit, isBlocked, onError: () => runtime.emit('teams.error', {}) });
   // The phone's follow-up after an answer comes from whichever team filed the card.
   const answers = { ...support, describeAnswer: async (decision) => (await support.describeAnswer(decision)) ?? (await engineering.describeAnswer(decision)) ?? (await finance.describeAnswer(decision)) };
 
@@ -217,7 +221,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const brief = createBrief({ store, decisions, specialists });
   const teamsOverview = createTeamsOverview({ store });
   // Starting a team from the window: it starts the job at once and announces how it ended as the runtime event `team.job_finished`.
-  const jobs = createTeamJobs({ sales, support, emit, onError: () => runtime.emit('teams.error', {}) });
+  const jobs = createTeamJobs({ sales, support, engineering, finance, emit, onError: () => runtime.emit('teams.error', {}) });
   registerCommands(runtime, { store, version, decisions, orchestrator, teams: teamsOverview, brief, jobs, podFiles, pods, agentControl, agentEvents });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
@@ -237,6 +241,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     teams: teamsOverview,
     sales,
     support: answers,
+    engineering,
+    finance,
+    projects: async () => (await pods.list()).filter((p) => p.status === 'open').map((p) => ({ id: p.id, name: p.name })),
     audit,
     onError: () => runtime.emit('telegram.error', {}),
   });
@@ -262,6 +269,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     podFiles,
     agentControl,
     agentEvents,
+    taskResumer,
     problems: [],
 
     /** Record that the runtime started. If the database is not ready the runtime still runs, and says so. */
@@ -286,6 +294,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
         if (digestIssue) runtime.emit('digest.problem', { message: digestIssue });
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
+        taskResumer.start(); // carries on with tasks whose cards the founder approved (also while the app was closed)
         pods.start(); // listens for the founder's answers on pod cards, then opens any approved one that has no pod yet
         outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed
         if (approval.problem) runtime.emit('outbound.problem', { message: approval.problem });
@@ -303,6 +312,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
       orchestrator.stop();
       outbound.stop();
       pods.stop();
+      taskResumer.stop();
       if (!runtime.blockedReason()) {
         try {
           await audit.append({ actorType: 'system', action: 'runtime.stopped', detail: {} });
