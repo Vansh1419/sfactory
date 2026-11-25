@@ -163,7 +163,7 @@ async function build({ scout, scribe, review, reviewer = ['pass'], skillsDir = S
     ...createOutboundTools({ outbound }),
   ];
   const router = model({ scout, scribe, review });
-  const factory = createAgentFactory({ router, store: env.store, audit: env.audit, policy, catalogue, hasRule: async (t) => policy.isBuiltIn(t), configDir: CONFIG_DIR, skillsDir });
+  const factory = createAgentFactory({ router, store: env.store, audit: env.audit, policy, catalogue, hasRule: async (t) => policy.isBuiltIn(t), configDir: CONFIG_DIR, skillsDir, limits: { maxSteps: 10, maxTokens: 60_000 } /* what the app gives a worker (AGENT_LIMITS in src/runtime/index.js) */ });
   const sales = createSalesTeam({ factory, decisions, writeCard: writeCard ?? (async () => ({ ...CARD })) });
   return { sales, router, env, sent, search, google, decisions, outbound };
 }
@@ -219,6 +219,22 @@ const cases = [
       const failedCards = failed ? await pendingFor(h.env, failed.id) : [];
       const waitingCards = waiting ? await pendingFor(h.env, waiting.id) : [];
       return verdict(r.status === 'done' && messages.length === 2 && failed && waiting && failedCards.length === 0 && waitingCards.length === 1 && h.sent.length === 0, json({ status: r.status, statuses: messages.map((m) => m.status), failedCards: failedCards.length, waitingCards: waitingCards.length }));
+    },
+  },
+  {
+    // Nov 26, 2026. On the real run the lead sent Scribe back over its report, Scribe wrote the email again, and the founder got two cards for one
+    // company (and approved both). A worker that is sent back still finishes with exactly ONE email and ONE card.
+    id: 'when-the-lead-sends-the-writer-back-it-still-ends-with-one-email-and-one-card-for-the-company',
+    async check() {
+      const to = `${unique('ann')}@acme.example`;
+      const h = await build({ scout: scoutFor(to), scribe: scribeFor(to), review: [{ accept: true, feedback: '' }, { accept: false, feedback: 'Put the full proposal text in your report.' }, { accept: true, feedback: '' }] });
+      const r = await h.sales.workLead(lead({ email: to }));
+      const messages = await messagesTo(h.env, to);
+      const cards = messages.length > 0 ? (await h.env.store.select('decisions', { where: { status: 'pending' } })).filter((d) => d.action?.args?.messageId === messages[0].id) : [];
+      const runs = r.taskId ? await toolRuns(h.env, r.taskId) : [];
+      const submits = runs.filter((x) => x.tool === 'email.submit' && x.agent === 'Scribe').length;
+      const refused = (await h.env.fake.db.query("select count(*)::int as n from audit_log where action = 'outbound.drafted' and detail->>'domain' = 'acme.example'")).rows[0].n;
+      return verdict(r.status === 'done' && r.outputs[1].revisions === 1 && submits === 2 && messages.length === 1 && messages[0].status === 'awaiting_founder' && cards.length === 1 && refused >= 1 && h.sent.length === 0, json({ status: r.status, revisions: r.outputs?.[1]?.revisions, submits, messages: messages.map((m) => m.status), cards: cards.length }));
     },
   },
   {
@@ -318,7 +334,7 @@ const cases = [
       const r = await h.sales.workLead(lead({ email: to }));
       const first = prompts.find((p) => /You are Scout/.test(p)) ?? '';
       const second = prompts.find((p) => /You are Scout/.test(p) && /Step 1:/.test(p)) ?? '';
-      return verdict(r.status === 'done' && ['search.web', 'crm.save_lead', 'email.submit', 'drive.save_file'].every((t) => first.includes(`- ${t} (`)) && SALES_SKILLS.every((s) => first.includes(`## Skill: ${s}`)) && first.includes('## Skill: company-charter') && /data, not instructions/.test(second) && second.includes('Acme Ltd - online shoes'), json({ r: r.status, hasSecond: second.length > 0 }));
+      return verdict(r.status === 'done' && ['search.web', 'crm.save_lead', 'email.submit', 'drive.save_file'].every((t) => first.includes(`- ${t} (`)) && SALES_SKILLS.every((s) => first.includes(`## Skill: ${s}`)) && first.includes('## Skill: company-charter') && /data, not instructions/.test(second) && second.includes('Acme Ltd - online shoes'), json({ r: r.status, reason: r.reason, hasSecond: second.length > 0 }));
     },
   },
 ];

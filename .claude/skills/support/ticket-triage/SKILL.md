@@ -17,13 +17,15 @@ Read the whole message, then pick ONE:
 4. **Complaint:** the customer is unhappy, angry or disappointed, says the work is bad or late, threatens to leave, to dispute a payment or to post about us.
 5. **Legal or contract:** the customer asks about terms, a contract, who owns the work, privacy or data deletion, or mentions a lawyer, a court or a regulator.
 
-If a message is several kinds, the most serious one wins: legal, then complaint, then refund, then discount, then routine.
+6. **A question you cannot answer from facts you have:** it needs something about their project, their account, an invoice, a payment, a date or anything else that the ticket and your instructions do not give you. Do not guess, and do not write a reply that only says someone will follow up: the review refuses that, because the company has not promised it.
+
+If a message is several kinds, the most serious one wins: legal, then complaint, then refund, then discount, then a question you cannot answer, then routine.
 
 **When you are not sure, treat it as not routine.** A wrong "routine" can cost the company; a wrong "escalate" only costs the founder a minute.
 
 ## What to do
 
 - **Routine:** write the reply with the reply-tone skill, send it with `email.submit`, then record it with `tickets.mark_answered`. See the client-onboarding skill if the customer is new.
-- **Anything else:** do NOT answer. Use the matching tool name to ask the founder: `refund.issue`, `discount.grant`, `complaint.escalate` or `legal.escalate`, with `args` like `{"ticketId": "<the id>", "reason": "<one plain sentence>"}`. That stops you and sends the founder a card; this is expected. Do not write to the customer at all, not even "we are looking into it".
+- **Anything else:** do NOT answer. Use the matching tool name to ask the founder: `refund.issue`, `discount.grant`, `complaint.escalate`, `legal.escalate` or `question.escalate`, with `args` like `{"ticketId": "<the id>", "reason": "<one plain sentence>"}`. That stops you and sends the founder a card; this is expected. Do not write to the customer at all, not even "we are looking into it".
 
 Never say to the customer that a refund, discount or decision has been made. Only the founder decides.

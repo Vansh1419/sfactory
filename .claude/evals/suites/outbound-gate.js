@@ -62,6 +62,9 @@ function reviewer(verdicts = ['pass']) {
 
 async function build(over = {}) {
   const env = await database();
+  // Every case starts with no messages. The gate refuses a second email to an address that already has one waiting, and the cases share one
+  // address, so earlier cases' waiting messages would otherwise refuse later ones. (tickets point at messages and decisions, so all three go.)
+  if (!over.keepMessages) await env.fake.db.query('truncate table public.decisions, public.outbound_messages, public.tickets');
   const policy = require(path.join(ROOT, 'src/runtime/policy'));
   const { createRuntime } = loadSubject('src/runtime/runtime.js');
   const { createDecisionService } = loadSubject('src/runtime/decisions.js');
@@ -239,7 +242,7 @@ const cases = [
       await h.decisions.resolve({ id: r.decisionId, decision: 'approved', via: 'dashboard' });
       await sleep(100);
       const midway = (await row(h.env, r.messageId)).status;
-      const after = await build();
+      const after = await build({ keepMessages: true }); // the app starting again: what was written before must still be there
       const ready = await until(async () => (await row(after.env, r.messageId)).status === 'ready');
       return verdict(midway === 'awaiting_founder' && ready, json({ midway, ready }));
     },
@@ -367,6 +370,65 @@ const cases = [
         && policy.checkAction({ tool: 'email.submit', access: 'write', args: {} }).allowed === true && policy.checkAction({ tool: 'email.send', access: 'write', args: {} }).allowed === true
         && policy.checkAction({ tool: 'outbound.approve_send', access: 'write', args: {} }).allowed === false && policy.checkAction({ tool: 'outbound.approve_send', access: 'write', args: {} }).category === 'legal_or_public',
       json({ names, withTeam, sub: sub.text, early: early.text, late: late.text, sent: h.sent.length }));
+    },
+  },
+  {
+    // Nov 26, 2026. A worker that its lead sent back (or that simply ran twice) filed a second card for the same company, and the founder approved
+    // both. One email at a time for one address from one team.
+    id: 'a-second-email-to-an-address-that-already-has-one-waiting-is-refused-with-the-first-ones-id-and-nothing-is-written',
+    async check() {
+      const h = await build();
+      const draftedCount = async () => (await h.env.fake.db.query("select count(*)::int as n from audit_log where action = 'outbound.drafted' and detail->>'team' = 'support'")).rows[0].n;
+      const draftedBefore = await draftedCount(); // the audit log is append-only and keeps other cases' rows: count the change
+      const first = await submit(h, 'one', { team: 'support', to: 'Dup@Example.com' });
+      const reviewsBefore = h.rev.calls.length;
+      const second = await submit(h, 'two', { team: 'support', to: 'dup@example.com' });
+      const sameTeamOtherAddress = await submit(h, 'three', { team: 'support', to: 'other@example.com' });
+      const otherTeamSameAddress = await submit(h, 'four', { team: 'marketing_sales', to: 'dup@example.com' });
+      const rows = await h.env.store.select('outbound_messages', { where: { to_address: 'dup@example.com' } });
+      const rowsMixed = (await h.env.store.select('outbound_messages', { where: {} })).filter((m) => m.to_address.toLowerCase() === 'dup@example.com' && m.team === 'support');
+      const drafted = (await draftedCount()) - draftedBefore;
+      return verdict(first.ok && first.status === 'awaiting_founder' && second.ok === false && second.status === 'duplicate' && second.messageId === first.messageId && second.problems[0].includes(first.messageId) && /waiting for the founder to decide/.test(second.problems[0]) && /Do not write another one/.test(second.problems[0])
+        && h.rev.calls.length === reviewsBefore + 2 && rowsMixed.length === 1 && sameTeamOtherAddress.ok && otherTeamSameAddress.ok && drafted === 2 && rows.length + 0 >= 0, json({ second, reviews: h.rev.calls.length, rowsMixed: rowsMixed.length, drafted }));
+    },
+  },
+  {
+    id: 'an-approved-email-that-is-not-sent-yet-also-blocks-another-but-a-sent-rejected-cancelled-or-failed-one-does-not',
+    async check() {
+      const problems = [];
+      // Approved and waiting to be sent blocks another; once it is sent a follow-up is fine.
+      const a = await build({ approvalUntil: PAST });
+      const ready = await submit(a, 'ready', { team: 'support', to: 'a@example.com' });
+      const blocked = await submit(a, 'again', { team: 'support', to: 'A@example.com' });
+      await a.outbound.send({ messageId: ready.messageId });
+      const afterSent = await submit(a, 'followup', { team: 'support', to: 'a@example.com' });
+      if (ready.status !== 'ready' || blocked.status !== 'duplicate' || !/approved and waiting to be sent/.test(blocked.problems?.[0] ?? '') || !afterSent.ok || a.sent.length !== 1) problems.push(`ready/sent: ${json({ ready: ready.status, blocked: blocked.status, afterSent: afterSent.status })}`);
+      // Rejected by the founder: a new email is fine.
+      const b = await build();
+      const waiting = await submit(b, 'one', { to: 'b@example.com' });
+      await b.decisions.resolve({ id: waiting.decisionId, decision: 'rejected', via: 'dashboard' });
+      await until(async () => (await row(b.env, waiting.messageId)).status === 'rejected');
+      const afterReject = await submit(b, 'two', { to: 'b@example.com' });
+      if (!afterReject.ok) problems.push(`after reject: ${json(afterReject)}`);
+      // A draft that failed review never waited for anything, so it blocks nothing.
+      const c = await build({ reviewer: reviewer(['fail', 'pass']) });
+      const failed = await submit(c, 'one', { to: 'c@example.com' });
+      const retry = await submit(c, 'two', { to: 'c@example.com' });
+      if (failed.status !== 'review_failed' || retry.status !== 'awaiting_founder') problems.push(`after failed review: ${json({ failed: failed.status, retry: retry.status })}`);
+      return verdict(problems.length === 0, problems.join('; '));
+    },
+  },
+  {
+    id: 'if-the-waiting-messages-cannot-be-checked-nothing-is-written-or-reviewed-and-the-answer-is-an-error',
+    async check() {
+      let inserted = 0;
+      let reviewed = 0;
+      const store = { select: async () => { throw new Error('database said sb_secret_ABCDEFGHIJKLMNOP'); }, insert: async () => { inserted += 1; return {}; }, update: async () => [] };
+      const outbound = loadSubject('src/runtime/outbound/service.js').createOutbound({
+        store, audit: { append: async () => {} }, decisions: {}, review: { review: async () => { reviewed += 1; return { verdict: 'pass', problems: [] }; } }, writeCard: async () => ({ ...CARD }), approvalUntil: null, runtime: { on: () => () => {} },
+      });
+      const r = await outbound.submit({ team: 'support', ...MESSAGE('unchecked') });
+      return verdict(r.ok === false && r.status === 'error' && inserted === 0 && reviewed === 0 && !json(r).includes('sb_secret'), json({ r, inserted, reviewed }));
     },
   },
   {

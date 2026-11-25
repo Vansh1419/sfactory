@@ -13,6 +13,7 @@ These four kinds of ticket are the founder's to decide. The company is a sole pr
 | a discount, a lower price, a free extra, a plan change | `discount.grant` | a price change |
 | an unhappy customer, a threat to leave or to post publicly | `complaint.escalate` | what to say to them |
 | terms, a contract, ownership, privacy, data deletion, a lawyer or a regulator | `legal.escalate` | a legal or public matter |
+| a question you cannot answer from facts you have (an invoice, a payment, a date, their project) | `question.escalate` | what to tell the customer |
 
 ## How to escalate
 

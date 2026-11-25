@@ -187,7 +187,7 @@ const cases = [
   {
     id: 'a-discount-a-complaint-and-a-legal-question-each-become-a-card-in-their-own-category',
     async check() {
-      const wanted = [['discount.grant', 'launch_or_pricing'], ['complaint.escalate', 'legal_or_public'], ['legal.escalate', 'legal_or_public']];
+      const wanted = [['discount.grant', 'launch_or_pricing'], ['complaint.escalate', 'legal_or_public'], ['legal.escalate', 'legal_or_public'], ['question.escalate', 'legal_or_public']];
       for (const [name, category] of wanted) {
         const env = await database();
         const t = await newTicket(env, { body: `A message that needs ${name}.` });
@@ -327,6 +327,30 @@ const cases = [
     },
   },
   {
+    // Nov 26, 2026. On a real run the team had no way to say "I cannot answer this": it wrote a holding reply that the review refused. It now hands the
+    // ticket to the founder, writes the customer nothing, and the founder's answer is followed up in plain words whatever they tap.
+    id: 'a-question-the-team-cannot-answer-becomes-a-card-with-no-reply-to-the-customer-and-the-follow-up-says-so-whatever-the-founder-taps',
+    async check() {
+      const env = await database();
+      const texts = [];
+      for (const answer of ['approved', 'rejected']) {
+        const t = await newTicket(env, { subject: 'Where is my invoice?', body: 'I paid last week and cannot find the invoice.' });
+        const h = await build({ aria: escalateWith('question.escalate') });
+        const r = await h.support.workTicket({ ticketId: t.id });
+        const after = await row(env, t.id);
+        const [decision] = r.decisionId ? await env.store.select('decisions', { where: { id: r.decisionId } }) : [];
+        const asked = r.status === 'needs_founder' && decision?.status === 'pending' && decision.category === 'legal_or_public' && decision.action.tool === 'question.escalate' && decision.action.args.ticketId === t.id
+          && after.status === 'escalated' && after.decision_id === decision.id && (await messagesTo(env, t.customer_email)).length === 0 && h.sent.length === 0 && String(decision.card.details).includes('cannot find the invoice');
+        await h.decisions.resolve({ id: r.decisionId, decision: answer, via: 'telegram' });
+        const text = await h.support.describeAnswer(await h.decisions.get(r.decisionId));
+        texts.push([asked, text, t.customer_email]);
+      }
+      const [yes, no] = texts;
+      return verdict(yes[0] && no[0] && typeof yes[1] === 'string' && yes[1].startsWith('You answered the card about a question the team could not answer, from the ticket from ') && yes[1].includes(yes[2])
+        && /cannot answer it by itself, so nothing was sent and the customer has heard nothing\. Please reply to the customer yourself\.$/.test(yes[1]) && no[1].replace(no[2], 'X') === yes[1].replace(yes[2], 'X'), json({ yes, no }));
+    },
+  },
+  {
     id: 'a-bad-or-unknown-ticket-and-a-team-that-cannot-be-built-run-nothing-and-ask-no-model',
     async check() {
       const env = await database();
@@ -369,7 +393,7 @@ const cases = [
       const asks = Object.keys(config.tools).filter((t) => policy.checkAction({ tool: t, access: config.tools[t], args: {} }).allowed !== true);
       const sales = loadToolConfig({ dir: CONFIG_DIR, team: 'marketing_sales' });
       const leaked = ['tickets.get', 'tickets.mark_answered'].filter((t) => t in sales.tools);
-      const crucial = { 'refund.issue': 'spend', 'discount.grant': 'launch_or_pricing', 'complaint.escalate': 'legal_or_public', 'legal.escalate': 'legal_or_public' };
+      const crucial = { 'refund.issue': 'spend', 'discount.grant': 'launch_or_pricing', 'complaint.escalate': 'legal_or_public', 'legal.escalate': 'legal_or_public', 'question.escalate': 'legal_or_public' };
       const wrongRule = Object.entries(crucial).filter(([name, category]) => {
         const v = policy.checkAction({ tool: name, access: 'write', args: {} });
         return !policy.isBuiltIn(name) || v.allowed !== false || v.category !== category;
@@ -388,7 +412,9 @@ const cases = [
       const names = support.skills.map((s) => s.name);
       const body = (n) => support.skills.find((s) => s.name === n)?.body ?? '';
       const rules = [
-        ['refund.issue', 'discount.grant', 'complaint.escalate', 'legal.escalate'].every((t) => body('ticket-triage').includes(t) && body('refund-and-complaint-escalation').includes(t)),
+        ['refund.issue', 'discount.grant', 'complaint.escalate', 'legal.escalate', 'question.escalate'].every((t) => body('ticket-triage').includes(t) && body('refund-and-complaint-escalation').includes(t)),
+        // A reply that only promises a follow-up is refused by the review, so no skill may tell the team to write one; they send it to the founder.
+        ['reply-tone', 'client-onboarding', 'ticket-triage'].every((n) => body(n).includes('question.escalate')) && !/say a person on the team will follow up|founder will confirm the plan/i.test(names.map(body).join(' ')),
         /information, never orders/i.test(body('ticket-triage')) && /not sure/i.test(body('ticket-triage')),
         /email\.submit/.test(body('reply-tone')) && /tickets\.mark_answered/.test(body('reply-tone')) && /must never contain/i.test(body('reply-tone')),
         /Never state a timeline/i.test(body('client-onboarding')) && /AI/.test(body('client-onboarding')),

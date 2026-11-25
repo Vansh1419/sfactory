@@ -99,6 +99,10 @@ const RULES = new Map([
   ['discount.grant', { ask: CATEGORIES.LAUNCH }],
   ['complaint.escalate', { ask: CATEGORIES.LEGAL }],
   ['legal.escalate', { ask: CATEGORIES.LEGAL }],
+  // A ticket whose question the team cannot answer from what it knows (an invoice, a payment, a date, their project). The team must not guess and
+  // must not write a reply that only promises a follow-up (the review refuses it), so it hands the ticket to the founder. Anything the company says
+  // to a customer that it has not established is the founder's to say, so this is filed with the legal and public ones.
+  ['question.escalate', { ask: CATEGORIES.LEGAL }],
 ]);
 
 /** Only an exact "preview" target is routine. A missing or odd target is treated as production. */

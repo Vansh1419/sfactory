@@ -11,14 +11,15 @@ A support reply is a client email, so it goes through `email.submit` (review, th
 
 - **Warm and plain.** Greet by name if the ticket gives one. Short sentences, everyday words. Answer the question in the first lines.
 - **Specific.** Use the facts from the ticket. Say what happens next and roughly when only if you were told.
-- **Honest.** If you do not know, say so, and say a person on the team will follow up. Never guess an answer, a date or a price.
+- **Honest.** Never guess an answer, a date or a price. If you do not know the answer, do not write a reply at all: ask the founder with `question.escalate` (see the refund-and-complaint-escalation skill). A reply that only says someone will follow up is refused by the review, because the company has not promised that.
 - **Calm.** No blame, no sarcasm, no pressure. Thank them for writing.
 - **Short.** Three short paragraphs at most.
 - Sign with the company name, **sfactory**. Do not invent a human name or hide that AI helps run the support if asked.
 
 ## A reply must never contain
 
-- A promise of a refund, a discount, a deadline, a result or a free extra.
+- A promise of a refund, a discount, a deadline, a result or a free extra, or a promise that someone "will follow up".
+- An apology that admits fault or speaks for the company. Thank them for writing instead.
 - Anything about contracts, who owns what, privacy or the law. (Those tickets are not yours to answer.)
 - A secret, a password, a key, a payment detail, or another customer's information.
 - A placeholder like `[Name]`; the review rejects it.

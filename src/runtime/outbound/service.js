@@ -76,6 +76,16 @@ function createOutbound({ store, audit, decisions, review, writeCard, send, appr
     return filed.id;
   }
 
+  /** The message from this team to this address (any letter case) that still waits for the founder or for sending, or null. */
+  async function findWaiting(team, to) {
+    for (const status of ['awaiting_founder', 'ready', 'sending']) {
+      const rows = await store.select('outbound_messages', { where: { team, status }, order: 'created_at.desc', limit: MAX_RECOVERED });
+      const hit = rows.find((m) => String(m.to_address).toLowerCase() === String(to).toLowerCase());
+      if (hit) return hit;
+    }
+    return null;
+  }
+
   async function submit(request) {
     if (!isObject(request)) return invalid(['The request is not valid.']);
     if (!TEAMS.includes(request.team)) return invalid(['The team is not valid.']);
@@ -84,6 +94,21 @@ function createOutbound({ store, audit, decisions, review, writeCard, send, appr
     if (!checked.ok) return invalid(checked.problems);
 
     const team = request.team;
+
+    // One email at a time for one address from one team. A worker that is sent back by its lead (or that simply runs twice) would otherwise file a
+    // second card for the same company, and the founder could approve both. An email that is waiting for the founder, or is approved and not yet
+    // sent, blocks another; once the earlier one is sent, rejected, cancelled or failed, a new one is fine (a follow-up is not a duplicate).
+    let waiting;
+    try {
+      waiting = await findWaiting(team, message.to);
+    } catch {
+      return { ok: false, status: 'error', problems: ['The message could not be checked against the ones already waiting, so it was not sent.'] };
+    }
+    if (waiting) {
+      const where = waiting.status === 'awaiting_founder' ? 'it is waiting for the founder to decide' : 'it is approved and waiting to be sent';
+      return { ok: false, status: 'duplicate', messageId: waiting.id, problems: [`There is already an email to this address (message id ${waiting.id}): ${where}. Do not write another one. Say in your report that it is already waiting, with that message id.`] };
+    }
+
     const agentId = typeof request.agentId === 'string' && UUID.test(request.agentId) ? request.agentId : undefined;
     const founderRequired = approvalRequired({ until: approvalUntil, now: now() });
     const id = crypto.randomUUID();

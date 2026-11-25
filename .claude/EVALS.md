@@ -55,15 +55,15 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `phase2-gate` | `scripts/gate2.js` (Gate 2, also run by hand with `npm run gate:2`) | 3 | 100% | 2.7 | pass |
 | `skills-loader` | `src/runtime/agents/skills.js` (shared plus a team's skills) | 10 | 100% | 2.1 | pass |
 | `agent-loop` | `src/runtime/agents/agent.js` (one agent's step loop) | 20 | 100% | 2.1 | pass |
-| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 23 | 100% | 2.1 | pass |
+| `team-framework` | `src/runtime/agents/{lead,team,index}.js` (lead, workers and the factory, on a real database) | 24 | 100% | 2.1 | pass |
 | `outbound-review` | `src/runtime/outbound/{review,settings}.js` (the review agent and the founder-approval setting) | 15 | 100% | 2.2 | pass |
-| `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 21 | 100% | 2.2 | pass |
+| `outbound-gate` | `src/runtime/outbound/{service,tools}.js` (the step 2.2 done-when, on a real database) | 24 | 100% | 2.2 | pass |
 | `search-tool` | `src/runtime/tools/search.js` (web search through Tavily) | 8 | 100% | 2.3 (search) | pass |
 | `crm-tools` | `src/runtime/tools/crm.js` (find and save leads in the `clients` table), on a real Postgres | 10 | 100% | 2.3 (CRM) | pass |
 | `google-tools` | `src/runtime/tools/google.js` (read Gmail, make drafts, list and save Drive files; never sends) | 11 | 100% | 2.3 (Gmail and Drive) | pass |
-| `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 10 | 100% | 2.3 | pass |
+| `sales-team` | `src/runtime/teams/marketing-sales.js`, `config/mcp/marketing_sales.yaml` and `.claude/skills/marketing_sales/` (the step 2.3 done-when, on a real database) | 11 | 100% | 2.3 | pass |
 | `ticket-tools` | `src/runtime/tools/tickets.js` (read a ticket a team has taken, record that it was answered), on a real Postgres | 9 | 100% | 2.4 (tickets) | pass |
-| `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 13 | 100% | 2.4 | pass |
+| `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 14 | 100% | 2.4 | pass |
 | `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 8 | 100% | 2.5 | pass |
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 14 | 100% | 2.5 | pass |
 | `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 10 | 100% | 2.6 | pass |
@@ -432,7 +432,9 @@ Covers: one JSON action per model call (a tool, or finish); the first prompt hol
 
 Suite: `.claude/evals/suites/team-framework.js`. Code under test: `src/runtime/agents/lead.js`, `team.js` and `index.js` (the factory). Real Postgres with the real migrations: the `tasks`, `agents` and `audit_log` rows are real. The model is scripted; the policy, tool config, skills and tool loader are real.
 
-**Cases:** 23
+**Cases:** 24
+
+Added Nov 26, 2026: **the lead is told which tools its workers really have** (the same list the worker sees, in both the plan and the review) **and to judge the substance, not the format**: it rejects only for work not done, a wrong or unknowable fact, a guess about money or a person, a promise or price nobody gave, or a secret. Checked by mutation: leaving the tool list out was caught.
 
 Added Nov 26, 2026: **an agent shows as working while it plans, works or reviews and idle again after, whatever happens** (including when the task ends blocked), and a paused agent is never overwritten. It is a display hint that can never stop a task. Checked by mutation: never marking an agent working was caught.
 
@@ -452,7 +454,9 @@ Covers: **code checks that cannot be argued with** (one recipient, a one-line su
 
 Suite: `.claude/evals/suites/outbound-gate.js`. Code under test: `src/runtime/outbound/service.js` (`createOutbound`) and `tools.js` (`email.submit`, `email.send`), the table `outbound_messages` (migration `20261125000000_outbound_messages.sql`). Real Postgres with the real migrations; the policy, decisions service, runtime event bus and reviewer are real (its model is scripted); the mail transport is a fake that records what it is asked to send.
 
-**Cases:** 21
+**Cases:** 24
+
+Added Nov 26, 2026: **one email at a time for one address from one team.** A second email to an address (any letter case) that already has one waiting for the founder, or approved and not yet sent, is refused with the first one's message id and nothing is written, reviewed or audited; another team, another address, a sent, rejected or cancelled earlier message, and an earlier draft that failed review do not block; and if the waiting messages cannot be checked the answer is an error and nothing is written. Every case now starts from empty message tables (a restart case keeps them). Checked by mutation: turning the rule off was caught here and in `sales-team`.
 
 The step 2.2 "done when": **a drafted email cannot be sent without passing review, and the setting forces a decision card.** A message that was never reviewed, or whose review failed, can never be sent. With no end date set (or one in the future) a reviewed email files a card (category legal or public, the email text under "Show details") and is not sent; approving the card makes it ready and the STORED text is sent exactly once; rejecting it means it is never sent; answering a second time changes nothing. Once the period is over a passing review is enough and no card is filed, except when the review itself says the founder must decide. A card that cannot be written cancels the message. An approval given while the app was closed is applied on start. Sending twice at the same moment sends once; a failing mail transport leaves `send_failed` and is never retried; with no mail account nothing is sent. Every step is audited before it is made, in order, and the audit log never holds an address or a body (only the recipient's domain). The email tools take the team from the run, never from the model.
 
@@ -632,7 +636,9 @@ Why it exists: the founder chose "drafts only, no send yet" for Gmail. Covers: f
 
 Suite: `.claude/evals/suites/sales-team.js`. The step 2.3 "done when", on a real Postgres with the migrations. Real: the agent factory and team framework, the repository's tool configuration and skills folders, the policy, the tool loader, the CRM tools, the outbound gate and the decisions service. Scripted: the model, the review agent's verdicts, the card writer, and Tavily and Google.
 
-**Cases:** 10
+**Cases:** 11
+
+Added Nov 26, 2026: **when the lead sends the writer back, the founder still ends up with one email and one card for the company** (the writer's second `email.submit` is refused as a duplicate). The suite now gives workers the same limits as the app (10 steps, 60,000 tokens).
 
 Covers: **a lead goes from research to a saved lead (status `lead`) to a drafted proposal to a waiting founder card, the task is done, and nothing is sent to the client or from Gmail**; every tool run is recorded as the agent that did it; a proposal the review fails never gets a card and only the rewritten one does; a crucial action (a signature request) stops the agent, becomes a pending decision in the right category, and the task is blocked; if that card cannot be made the result says so; a lead with a bad detail runs nothing and asks no model; a team without the charter is not built; the team's tools are exactly the files list, each with a built-in rule, none that needs the founder, and `email.send` is the only one that sends; its skills are the shared ones plus its own five and no other team gets them; the worker's prompt lists the team's tools and skills and fences what it found as data. Checked by mutation on Nov 25, 2026: treating a failed review as a pass was caught.
 
@@ -648,7 +654,9 @@ Why it exists: the store uses the service key, which bypasses row-level security
 
 Suite: `.claude/evals/suites/support-team.js`. The step 2.4 "done when", on a real Postgres with the migrations. Real: the agent factory and team framework, the repository's tool configuration and skills folders, the policy, the tool loader, the ticket tools, the outbound gate and the decisions service. Scripted: the model, the review agent's verdicts and the card writer.
 
-**Cases:** 13
+**Cases:** 14
+
+Added Nov 26, 2026: **a question the team cannot answer from what it knows becomes a card** (`question.escalate`, an always-ask rule with no tool, in the legal or public category) instead of a holding reply the review refuses; the customer is written nothing, the ticket is marked escalated, and the founder's follow-up says so whatever they tap. The skills no longer tell the team to promise a follow-up.
 
 Added Nov 26, 2026: **answering a refund, discount, complaint or legal card gives the founder a plain follow-up** (`describeAnswer`): what they decided, that nothing was done (there is no payments tool and nothing that writes to the customer), that the customer has heard nothing, and what is left for them to do; only for the card the ticket is escalated on, never repeating the customer's message, and with control characters and keys removed. Checked by mutation: following up for any card that names a ticket was caught.
 

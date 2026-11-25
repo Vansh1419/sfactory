@@ -80,6 +80,7 @@ function createAgentFactory({ router, store, audit, policy, catalogue, hasRule, 
         team,
         instructions,
         router,
+        toolNames: loader.describe().map((t) => t.tool),
         workers: input.workers.map((w) => ({ name: w.name, summary: typeof w.summary === 'string' ? w.summary : '' })),
       });
       const built = createTeam({ team, lead, workers, store, audit, onChange });

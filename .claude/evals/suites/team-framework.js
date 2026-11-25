@@ -351,6 +351,30 @@ const cases = [
     },
   },
   {
+    // Nov 26, 2026. On a real run the lead rejected good work twice over the shape of the report and over a file that no tool could have saved, and
+    // the task ended blocked with the founder's cards already filed. The lead is now told which tools the workers have and to judge substance.
+    id: 'the-lead-is-told-which-tools-its-workers-have-and-to-judge-the-work-not-its-format',
+    async check() {
+      const env = await database();
+      const policy = require(path.join(ROOT, 'src/runtime/policy'));
+      const { createAgentFactory } = loadSubject('src/runtime/agents/index.js');
+      const router = model({ plan: [planFor('Wes')], worker: [JSON.stringify({ action: 'finish', output: 'Done.' })] });
+      const factory = createAgentFactory({ router, store: env.store, audit: env.audit, policy, catalogue: CATALOGUE, hasRule: async (t) => policy.isBuiltIn(t), configDir: CONFIG_DIR(), skillsDir: SKILLS_DIR() });
+      const built = await factory.buildTeam({ team: 'support', lead: { name: 'Lena' }, workers: [{ name: 'Wes', summary: 'Writes replies.' }] });
+      if (!built.ok) return verdict(false, json(built));
+      const r = await built.team.runTask(task('lead-tools'));
+      const plan = router.calls.find((c) => c.kind === 'plan').prompt;
+      const review = router.calls.find((c) => c.kind === 'review').prompt;
+      const toolsLine = /The workers can use only these tools: ([^\n]+)\./.exec(review)?.[1] ?? '';
+      const listed = toolsLine.split(', ').sort();
+      const worker = router.calls.find((c) => c.kind === 'worker').prompt;
+      const workerTools = [...worker.matchAll(/^- ([a-z0-9_.-]+) \((?:read|write)\)/gm)].map((m) => m[1]).sort();
+      return verdict(r.status === 'done' && listed.length > 0 && json(listed) === json(workerTools) && !listed.includes('github.read_file') && plan.includes(`The workers can use only these tools: ${toolsLine}.`)
+        && /do not invent extra requirements/i.test(plan) && /Judge the SUBSTANCE of the work, not its format/.test(review) && /Do NOT reject because of how the report is worded/.test(review)
+        && /Never ask for work that needs a tool the worker does not have/.test(review) && /Reject only for: something the subtask asked to be DONE that was not done/.test(review), json({ listed, workerTools, status: r.status }));
+    },
+  },
+  {
     id: 'the-factory-refuses-to-build-a-team-when-the-company-charter-is-missing',
     async check() {
       const env = await database();
