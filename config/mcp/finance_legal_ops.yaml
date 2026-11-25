@@ -1,0 +1,10 @@
+# The Finance, Legal and Ops team's own tools, on top of shared.yaml (PLAN.md step 3.4). Read by src/runtime/tools/config.js and graded by the
+# `finance-tools` and `finance-team` evals. Same format as shared.yaml: tool name: read | write, and the tag must match the tag the tool declares itself.
+# Listing a tool does NOT make it allowed: the policy check still decides.
+#
+# The team holds NO payment credentials. A payout, a signature request, an issued legal document or a signed agreement has no tool at all:
+# reaching for one stops the agent and files a card for the founder (the ask-rules in src/runtime/policy.js). Expenses and contracts are
+# written up as drafts with docs.create_draft (in shared.yaml); the books (Zoho) and the payment account (Razorpay) are not connected.
+tools:
+  # A draft invoice with the GST worked out in code. No number, never sent.
+  invoice.draft: write

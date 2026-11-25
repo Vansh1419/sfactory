@@ -33,6 +33,7 @@ const { createPodFileTools } = require('./tools/pod-files');
 const { createContext7Tools } = require('./tools/context7');
 const { createBrowserTools, loadPlaywrightDriver } = require('./tools/browser');
 const { createSearchTools } = require('./tools/search');
+const { createInvoiceTools } = require('./tools/invoice');
 const { createCrmTools } = require('./tools/crm');
 const { createGoogleTools } = require('./tools/google');
 const { loadToolConfig, selectTools } = require('./tools/config');
@@ -41,6 +42,7 @@ const { createSalesTeam } = require('./teams/marketing-sales');
 const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
 const { createEngineeringTeam } = require('./teams/engineering');
+const { createFinanceTeam } = require('./teams/finance-legal-ops');
 const { createTeamsOverview } = require('./teams/overview');
 const { createBrief } = require('./brief');
 const { createTeamJobs } = require('./teams/jobs');
@@ -67,7 +69,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, pods: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -162,6 +164,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     ...createGoogleTools({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, refreshToken: env.GOOGLE_REFRESH_TOKEN, fetchImpl }),
     // The Support team's ticket tools (step 2.4). A reply is checked through the outbound service, never by reading its table.
     ...createTicketTools({ store, outbound }),
+    // The Finance, Legal and Ops team's tool (step 3.4): a draft invoice with the GST worked out in code. There is no payment tool and no payment credential.
+    ...createInvoiceTools(),
   ];
   const toolSelection = selectTools({ catalogue, config: loadToolConfig({ dir: toolConfigDir }) });
   // `additionalTools` are tools added in code (the Phase 1 gate test uses a pretend purchase tool). They skip the
@@ -189,8 +193,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const support = createSupportTeam({ factory: agents, store, decisions, writeCard: createModelCardWriter({ router }), outbound, onError: () => runtime.emit('support.error', {}) });
   // The Engineering team (step 3.3): works one task inside one pod; a merge or a production deploy becomes a founder card tied to the pod.
   const engineering = createEngineeringTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('engineering.error', {}) });
+  // The Finance, Legal and Ops team (step 3.4): drafts invoices and reads contracts; a payout, a signature or a legal document becomes a founder card (tied to the pod when there is one).
+  const finance = createFinanceTeam({ factory: agents, decisions, writeCard: createModelCardWriter({ router }), onError: () => runtime.emit('finance.error', {}) });
   // The phone's follow-up after an answer comes from whichever team filed the card.
-  const answers = { ...support, describeAnswer: async (decision) => (await support.describeAnswer(decision)) ?? (await engineering.describeAnswer(decision)) };
+  const answers = { ...support, describeAnswer: async (decision) => (await support.describeAnswer(decision)) ?? (await engineering.describeAnswer(decision)) ?? (await finance.describeAnswer(decision)) };
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
@@ -237,6 +243,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     sales,
     support,
     engineering,
+    finance,
     pods,
     problems: [],
 

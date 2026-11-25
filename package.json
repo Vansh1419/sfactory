@@ -17,6 +17,7 @@
     "ticket": "node scripts/ticket.js",
     "pod": "node scripts/pod.js",
     "engineer": "node scripts/engineer.js",
+    "finance": "node scripts/finance.js",
     "db:migrate": "node scripts/db-migrate.js",
     "fake:supabase": "node scripts/fake-supabase.js",
     "eval": "node .claude/evals/run.js",

@@ -95,6 +95,8 @@ const RULES = new Map([
   ['github.list_pull_requests', { access: 'read' }],
   ['github.create_pull_request', { access: 'write' }],
   ['zoho_books.create_bookkeeping_entry', { access: 'write' }],
+  // Step 3.4: the Finance, Legal and Ops team writes a DRAFT invoice (GST worked out in code, no number, never sent). Routine: it changes nothing outside the app.
+  ['invoice.draft', { access: 'write' }],
   ['hubspot.update_lead_stage', { access: 'write' }],
   ['docs.create_draft', { access: 'write' }],
   // Outbound email (step 2.2). Both are routine for the policy because the gate is INSIDE the tools: `email.submit` writes
