@@ -12,7 +12,7 @@ const { createDecisionService } = require('./decisions');
 const { createPolicyTools } = require('./policy-tools');
 const { createRouter } = require('./router');
 const { buildProviders } = require('./providers');
-const { createTelegramService, telegramProblem } = require('./telegram');
+const { createTelegramService, telegramProblem, digestProblem } = require('./telegram');
 const { createOrchestratorService } = require('./orchestrator/service');
 const { createModelPlanner, createModelCardWriter, buildToolCatalogue } = require('./orchestrator/model');
 const { listRules, isBuiltIn, normaliseTool } = require('./policy');
@@ -35,6 +35,7 @@ const { createSalesTeam } = require('./teams/marketing-sales');
 const { createTicketTools } = require('./tools/tickets');
 const { createSupportTeam } = require('./teams/support');
 const { createTeamsOverview } = require('./teams/overview');
+const { createBrief } = require('./brief');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -167,7 +168,9 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
 
   // The window's commands. They are registered here, after the orchestrator exists, because goals.list reads
   // the founder's goals from it.
-  registerCommands(runtime, { store, version, decisions, orchestrator, teams: createTeamsOverview({ store }) });
+  // The daily brief: the window's Brief panel and Telegram's /brief and morning digest all show the lines this builds.
+  const brief = createBrief({ store, decisions });
+  registerCommands(runtime, { store, version, decisions, orchestrator, teams: createTeamsOverview({ store }), brief });
 
   // The Telegram bot, only when TELEGRAM_BOT_TOKEN and TELEGRAM_FOUNDER_CHAT_ID are both set. It starts
   // with the runtime and never starts on a blocked one, and it is how the founder gives a goal (/goal).
@@ -182,9 +185,12 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     store,
     fetchImpl,
     sleep,
+    brief,
+    audit,
     onError: () => runtime.emit('telegram.error', {}),
   });
   const telegramIssue = telegramProblem(env); // a setting that is wrong must be said, not silently ignored
+  const digestIssue = digestProblem(env);
 
   return {
     runtime,
@@ -219,6 +225,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
         }
         runtime.emit('runtime.ready', {});
         if (telegramIssue) runtime.emit('telegram.problem', { message: telegramIssue });
+        if (digestIssue) runtime.emit('digest.problem', { message: digestIssue });
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
         outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed

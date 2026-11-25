@@ -256,9 +256,12 @@ Each phase is split into numbered steps (for example `1.4`). A step is small eno
 - **Decided, and what it means:** the page is event-driven like the Goals panel, plus a Refresh button and a reload when the window gets focus; it does NOT poll on a timer, because every command is written to the append-only audit log. So inside the app a change shows at once, but work done by another process (`npm run lead` or `npm run ticket` in a terminal) shows only when the window next gets focus or Refresh is pressed. Nothing in the app starts a team yet (no Telegram `/lead` or `/ticket`, no button), so today the page mostly shows what those scripts did.
 - **Not done:** agents always show as idle, because nothing sets an agent's status to working yet; the page has not been opened in the real window.
 
-**2.6 Daily brief and morning digest** (one day)
+**2.6 Daily brief and morning digest** (one day) — status: **built and graded (Nov 25, 2026); not yet seen on a real phone or in the real window**
 - Brief covers revenue, leads, tickets, deployments and spend requests. The bot sends a digest at a fixed IST time and answers `/brief`.
 - **Done when:** the digest arrives on schedule and matches the dashboard brief.
+- **Built:** `src/runtime/brief.js` builds ONE brief (headline plus six sections: Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests, each a few plain lines). The window's `BriefPanel.jsx` (the `brief.get` command) draws exactly those lines; Telegram's `/brief` and the digest send `renderBriefText`, which is built from the same lines, so the phone and the window cannot disagree. `src/runtime/telegram/digest.js` sends it once a day at `DIGEST_TIME_IST` (default 09:00 IST, `off` turns it off); if the app was closed then, it sends on start within six hours after, never twice a day (the send is in the audit log), audited before it sends, retried after five minutes up to six times. Decisions are read through a new read-only `decisions.summary`. Graded by `daily-brief` (9), `morning-digest` (11), plus new cases in `telegram-bot`, `runtime-core` and `decisions-service`.
+- **Honest about what is missing:** Revenue and Deployments show "Not tracked yet", because no payments and no deployment tool are connected, and no number is invented.
+- **Not done:** the digest has not been sent to a real phone (this machine's connection to Telegram has timed out before) and the panel has not been opened in the real window; "Waiting for you" does not yet list the cards one by one; `/status` is still a placeholder.
 
 **2.7 Phase 2 gate test** (half a day)
 

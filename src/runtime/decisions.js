@@ -39,6 +39,7 @@ const MAX_MONEY = 999999999999;
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULTS = Object.freeze({ remindAfterMs: 4 * HOUR_MS, maxReminders: 6, remindLimit: 100, remindEveryMs: 60 * 1000 });
 const MAX_TRANSITION_ROUNDS = 3;
+const SUMMARY_LIMIT = 200;
 
 /** An error with a safe code and message that may be shown to the founder. */
 class DecisionError extends Error {
@@ -340,7 +341,26 @@ function createDecisionService({ store, audit, emit, now = () => new Date(), isB
     return { reminded, failed };
   }
 
-  return { create, resolve, cancel, get, remindDue };
+  /**
+   * What the daily brief needs, read only (step 2.6): the cards waiting for the founder (their kind and any amounts) and what was decided since
+   * a moment (the kind and the answer). Never a card's text, an action or an id. The brief reads decisions only through here, so this service
+   * stays the one place that knows how a decision's status and resolution are stored.
+   */
+  async function summary({ since } = {}) {
+    ensureRunning();
+    const sinceMs = typeof since === 'string' ? Date.parse(since) : Number.NaN;
+    const waiting = await store.select('decisions', { where: { status: 'pending' }, order: 'created_at.asc', limit: SUMMARY_LIMIT });
+    const approved = await store.select('decisions', { where: { status: 'approved' }, order: 'resolved_at.desc', limit: SUMMARY_LIMIT });
+    const rejected = await store.select('decisions', { where: { status: 'rejected' }, order: 'resolved_at.desc', limit: SUMMARY_LIMIT });
+    return {
+      waiting: waiting.map((d) => ({ category: d.category, amountInr: d.amount_inr ?? null, amountUsd: d.amount_usd ?? null })),
+      decided: [...approved, ...rejected]
+        .filter((d) => !Number.isNaN(sinceMs) && Date.parse(d.resolved_at) >= sinceMs)
+        .map((d) => ({ category: d.category, status: d.status })),
+    };
+  }
+
+  return { create, resolve, cancel, get, summary, remindDue };
 }
 
 /**

@@ -81,7 +81,7 @@ const decision = (over = {}) => ({
 const unknownDecision = () => decision({ id: ID2, category: 'unknown', action: { tool: 'newtool.run', access: 'write', args: {} } });
 
 /** Bot plus fakes that record everything. */
-function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false, orchestrator } = {}) {
+function harness({ resolve, policy = {}, rows, editFails = false, answerFails = false, orchestrator, briefText } = {}) {
   const sent = [];
   const edits = [];
   const answers = [];
@@ -137,7 +137,7 @@ function harness({ resolve, policy = {}, rows, editFails = false, answerFails = 
       return { id: ID2, tool: a.tool, status: 'removed', changed: true, conflict: false, inEffect: true };
     },
   };
-  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, orchestrator, onError: (e) => errors.push(e) });
+  const bot = loadSubject(BOT).createBot({ api, founderChatId: FOUNDER, decisions, policyTools, orchestrator, briefText, onError: (e) => errors.push(e) });
   return { bot, sent, edits, answers, calls, errors };
 }
 
@@ -795,11 +795,52 @@ const cases = [
 
   // ---- Other commands ---------------------------------------------------------
   {
-    id: 'brief-status-and-pause-say-they-are-not-available-yet-and-call-nothing',
+    id: 'status-and-pause-say-they-are-not-available-yet-and-call-nothing',
     async check() {
       const h = harness();
-      for (const body of ['/brief', '/status sales', '/pause agent-1']) await h.bot.handleUpdate(text(FOUNDER, body));
-      return verdict(h.sent.length === 3 && h.sent.every((m) => /not available yet/i.test(m.text)) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+      for (const body of ['/status sales', '/pause agent-1']) await h.bot.handleUpdate(text(FOUNDER, body));
+      return verdict(h.sent.length === 2 && h.sent.every((m) => /not available yet/i.test(m.text)) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => m.text)));
+    },
+  },
+  {
+    // /brief (step 2.6) sends the same text the morning digest sends and the window shows; the bot only passes it on.
+    id: 'brief-sends-the-brief-text-to-the-founder-as-plain-text-and-calls-nothing-else',
+    async check() {
+      let made = 0;
+      const h = harness({ briefText: async () => { made += 1; return 'Brief for Wednesday, 25 November 2026, made at 9:00 AM IST. Nothing needs you right now.\n\nLeads\n- 1 lead is in the list <b>x</b>'; } });
+      await h.bot.handleUpdate(text(FOUNDER, '/brief'));
+      await h.bot.handleUpdate(text(FOUNDER, '/brief please'));
+      return verdict(made === 2 && h.sent.length === 2 && h.sent.every((m) => m.text.startsWith('Brief for Wednesday, 25 November 2026') && m.text.includes('<b>x</b>') && m.chatId === FOUNDER && !m.buttons && m.parseMode === undefined) && h.calls.length === 0, JSON.stringify(h.sent.map((m) => [m.chatId, m.text.slice(0, 30), m.parseMode])));
+    },
+  },
+  {
+    id: 'brief-without-a-brief-says-it-is-not-available-and-a-failing-brief-gives-no-error-text',
+    async check() {
+      const none = harness();
+      await none.bot.handleUpdate(text(FOUNDER, '/brief'));
+      const failing = harness({ briefText: async () => { throw new Error('connection to db.internal failed sb_secret_ABCDEFGHIJKLMNOP'); } });
+      await failing.bot.handleUpdate(text(FOUNDER, '/brief'));
+      const shown = failing.sent.map((m) => m.text).join(' ');
+      return verdict(none.sent.length === 1 && none.sent[0].text === 'The brief is not available right now.' && failing.sent.length === 1 && !/db\.internal|sb_secret/.test(shown) && shown.length > 0, JSON.stringify({ none: none.sent.map((m) => m.text), failing: shown }));
+    },
+  },
+  {
+    id: 'brief-from-anyone-but-the-founder-gets-no-reply-and-makes-no-brief',
+    async check() {
+      let made = 0;
+      const h = harness({ briefText: async () => { made += 1; return 'SECRET BRIEF'; } });
+      await h.bot.handleUpdate(text(STRANGER, '/brief'));
+      await h.bot.handleUpdate(text(FOUNDER, '/brief', STRANGER)); // the founder's chat, a different sender
+      return verdict(made === 0 && h.sent.length === 0, JSON.stringify({ made, sent: h.sent.length }));
+    },
+  },
+  {
+    id: 'the-digest-is-sent-to-the-founders-chat-as-plain-text-and-an-empty-or-odd-text-sends-nothing',
+    async check() {
+      const h = harness();
+      const ok = await h.bot.announce('Brief for today.\n\n- one line');
+      const none = [await h.bot.announce(''), await h.bot.announce('   '), await h.bot.announce(undefined), await h.bot.announce(5), await h.bot.announce({})];
+      return verdict(ok !== null && h.sent.length === 1 && h.sent[0].chatId === FOUNDER && h.sent[0].text === 'Brief for today.\n\n- one line' && none.every((r) => r === null), JSON.stringify({ sent: h.sent.length, none }));
     },
   },
   {

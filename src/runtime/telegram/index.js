@@ -15,6 +15,8 @@ const { startReminderJob } = require('../decisions');
 const { createTelegramApi } = require('./api');
 const { createBot } = require('./bot');
 const { createPoller } = require('./poller');
+const { renderBriefText } = require('../brief');
+const { parseDigestTime, startDigestJob } = require('./digest');
 
 const MAX_PUSH_RETRIES = 3;
 const PUSH_RETRY_MS = 2000;
@@ -42,14 +44,26 @@ function telegramProblem(env) {
 }
 
 /** Returns null when Telegram is not set up. `start()` begins work; `stop()` ends it. */
-function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, onError = () => {} }) {
+function createTelegramService({ env, decisions, policyTools, orchestrator, runtime, store, fetchImpl, sleep, brief, audit, onError = () => {} }) {
   if (telegramProblem(env) !== null) return null;
   const token = clean(env.TELEGRAM_BOT_TOKEN);
   const chatId = clean(env.TELEGRAM_FOUNDER_CHAT_ID);
   if (!token || !chatId) return null;
 
   const api = createTelegramApi({ token, fetchImpl });
-  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, onError });
+  // /brief and the morning digest send the same text the window shows: it is built from the brief's own lines.
+  const briefText = brief ? async () => renderBriefText(await brief.get()) : undefined;
+  const bot = createBot({ api, founderChatId: chatId, decisions, policyTools, orchestrator, briefText, onError });
+  const digestSetting = parseDigestTime(env.DIGEST_TIME_IST);
+  // A day's send is written to the audit log, so a restart the same day does not send it again.
+  const ledger = store && audit ? {
+    async lastSentDate() {
+      const [row] = await store.select('audit_log', { where: { action: 'digest.sent' }, order: 'id.desc', limit: 1 });
+      return typeof row?.detail?.date === 'string' ? row.detail.date : null;
+    },
+    record: (action, detail) => audit.append({ actorType: 'system', action, detail }),
+  } : null;
+  let digest = null;
   const poller = createPoller({ api, handle: bot.handleUpdate, sleep, onError });
 
   const delivered = new Set(); // ids of cards sent to the phone during this run
@@ -103,6 +117,10 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
       reminders = startReminderJob({ service: decisions, notify: notifyReminder, onError });
       poller.start().catch(onError); // runs until stop()
       if (store) pushWaitingCards();
+      // The morning digest: once a day at DIGEST_TIME_IST (default 09:00 IST, "off" turns it off). Needs the brief and the audit log.
+      if (briefText && ledger && digestSetting.ok && !digestSetting.off) {
+        digest = startDigestJob({ time: digestSetting.time, getText: briefText, send: bot.announce, ledger, onError });
+      }
     },
 
     stop() {
@@ -110,6 +128,8 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
       unsubscribe?.();
       unsubscribeRuns?.();
       reminders?.stop();
+      digest?.stop();
+      digest = null;
       poller.stop();
       unsubscribe = null;
       unsubscribeRuns = null;
@@ -118,4 +138,9 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
   };
 }
 
-module.exports = { createTelegramService, telegramProblem };
+/** Why the morning digest will not run, in a sentence that names the setting and never its value; null when it is fine or deliberately off. */
+function digestProblem(env) {
+  return parseDigestTime(env?.DIGEST_TIME_IST).problem ?? null;
+}
+
+module.exports = { createTelegramService, telegramProblem, digestProblem };

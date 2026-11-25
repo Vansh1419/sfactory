@@ -33,7 +33,7 @@ async function probeDatabase(store) {
   }
 }
 
-function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null }) {
+function registerCommands(runtime, { store, version = '0.1.0', decisions = null, orchestrator = null, teams = null, brief = null }) {
   runtime.register('runtime.status', {
     audit: 'never', // health checks would flood the audit log
     allowWhenBlocked: true,
@@ -117,6 +117,18 @@ function registerCommands(runtime, { store, version = '0.1.0', decisions = null,
     handler: async () => {
       if (!teams) throw new CommandError('not_available', 'The teams are not available right now.');
       return teams.list();
+    },
+  });
+
+  // Today's brief, for the window's Brief panel (step 2.6): the same lines Telegram's /brief and the morning digest send. Read only, takes no
+  // options, audited like every other command (the panel loads once, on focus and when the founder presses Refresh, never on a timer).
+  runtime.register('brief.get', {
+    validate(args) {
+      return unknownKey(args, []);
+    },
+    handler: async () => {
+      if (!brief) throw new CommandError('not_available', 'The brief is not available right now.');
+      return brief.get();
     },
   });
 

@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('api', {
   teams: {
     list: () => invoke('teams.list'),
   },
+  brief: {
+    get: () => invoke('brief.get'),
+  },
   agents: {
     pause: (args) => invoke('agents.pause', args),
   },

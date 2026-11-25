@@ -300,7 +300,7 @@ const cases = [
     id: 'the-runtime-registers-exactly-the-planned-commands',
     async check() {
       const { runtime } = setupWithCommands();
-      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list']), `got ${json(runtime.commands())}`);
+      return verdict(json(runtime.commands().sort()) === json(['agents.pause', 'brief.get', 'decisions.list', 'decisions.resolve', 'goals.list', 'runtime.status', 'teams.list']), `got ${json(runtime.commands())}`);
     },
   },
   {
@@ -343,6 +343,26 @@ const cases = [
       const { store, runtime } = setupWithCommands({}, { teams: { async list() { return { at: 'x', teams: [] }; } } });
       await runtime.invoke('teams.list', {});
       return verdict(inserts(store).some((e) => e[1] === 'audit_log' && e[2].action === 'command.teams.list'), json(inserts(store).map((e) => e[2].action)));
+    },
+  },
+  {
+    // brief.get (step 2.6, Nov 25, 2026) is how the window shows today's brief: the same lines Telegram's /brief and the morning digest send.
+    id: 'brief-get-returns-the-brief-takes-no-options-and-is-audited-like-any-other-command',
+    async check() {
+      let calls = 0;
+      const brief = { at: '2026-11-25T03:30:00.000Z', dateLabel: 'Wednesday, 25 November 2026', headline: 'Brief', sections: [{ key: 'leads', title: 'Leads', available: true, lines: ['0 leads are in the list.'] }] };
+      const { store, runtime } = setupWithCommands({}, { brief: { async get() { calls += 1; return brief; } } });
+      const plain = await runtime.invoke('brief.get', {});
+      const bad = [await runtime.invoke('brief.get', { date: 'today' }), await runtime.invoke('brief.get', { limit: 5 })];
+      return verdict(plain.ok && json(plain.data) === json(brief) && calls === 1 && bad.every((r) => r.error?.code === 'invalid_args') && inserts(store).some((e) => e[1] === 'audit_log' && e[2].action === 'command.brief.get'), `plain ${json(plain)}, calls ${calls}, bad ${json(bad.map((r) => r.error?.code))}`);
+    },
+  },
+  {
+    id: 'brief-get-without-a-brief-says-not-available-and-a-failure-is-generic',
+    async check() {
+      const none = await setupWithCommands().runtime.invoke('brief.get', {});
+      const failing = await setupWithCommands({}, { brief: { async get() { throw new Error('connection to db.internal failed SECRETVALUE6'); } } }).runtime.invoke('brief.get', {});
+      return verdict(none.error?.code === 'not_available' && failing.error?.code === 'internal_error' && !json(failing).includes('SECRETVALUE6') && !json(failing).includes('db.internal'), json({ none, failing }));
     },
   },
   {

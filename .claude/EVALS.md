@@ -35,7 +35,7 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `claude-code-provider` | `src/runtime/providers/claude-code.js` | 12 | 100% | 1.3 | pass |
 | `model-router` | `src/runtime/router.js` | 35 | 100% | 1.3 | pass |
 | `http-providers` | `src/runtime/providers/{groq,ollama,index}.js` | 21 | 100% | 1.3 | pass |
-| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 72 | 100% | 1.8 | pass |
+| `telegram-bot` | `src/runtime/telegram/{bot,api,poller}.js` | 76 | 100% | 1.8 | pass |
 | `database-schema` | `supabase/migrations/*.sql` and `supabase/seed.sql` | 33 | 100% | 1.1 | pass |
 | `graph-checkpointer` | `src/runtime/orchestrator/checkpointer.js`, against a real Postgres with the migrations | 20 | 100% | 1.7b | pass |
 | `orchestrator` | `src/runtime/orchestrator/graph.js`, with the real policy and a real checkpoint store in one case | 57 | 100% | 1.7c | pass |
@@ -65,9 +65,11 @@ A case that has not finished after 60 seconds **fails** with "timed out". Before
 | `support-team` | `src/runtime/teams/support.js`, `config/mcp/support.yaml` and `.claude/skills/support/` (the step 2.4 done-when, on a real database) | 12 | 100% | 2.4 | pass |
 | `teams-overview` | `src/runtime/teams/overview.js` (what the Teams page shows: agents, open and blocked tasks), on a real Postgres | 6 | 100% | 2.5 | pass |
 | `teams-view` | `src/renderer/teams.mjs` and `TeamsPanel.jsx` (the logic and rules behind the window's Teams page) | 11 | 100% | 2.5 | pass |
+| `daily-brief` | `src/runtime/brief.js` and `src/renderer/BriefPanel.jsx` (the brief: figures, IST, one source for the window and Telegram) | 9 | 100% | 2.6 | pass |
+| `morning-digest` | `src/runtime/telegram/digest.js` (the digest sent once a day at a fixed IST time) | 11 | 100% | 2.6 | pass |
 | `goals-view` | `src/renderer/goals.mjs` (the logic behind the window's Goals panel, including the Download button) | 27 | 100% | 1.9 follow-up | pass |
-| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 33 | 100% | 1.2 | pass |
-| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 32 | 100% | 1.6 | pass |
+| `runtime-core` | `src/runtime/{config,audit,runtime,commands}.js` and `src/ipc-guard.js` | 35 | 100% | 1.2 | pass |
+| `decisions-service` | `src/runtime/decisions.js`, against a real Postgres with the migrations | 33 | 100% | 1.6 | pass |
 | `policy-tools` | `src/runtime/policy-tools.js` (the founder adding tools from Telegram), against a real Postgres | 22 | 100% | 1.6 follow-up (used by the bot in 1.8) | pass |
 
 Update the "Today" column when a suite's status changes.
@@ -202,7 +204,7 @@ Judgment call: Groq reports `costUsd: 0` because its free tier returns no cost; 
 
 Suite: `.claude/evals/suites/telegram-bot.js`. No dataset; each case is a check function in the suite file. Code under test: `src/runtime/telegram/bot.js`, `api.js` and `poller.js`, with the wiring (`index.js`, unit-tested in `index.test.js`) that starts them. Nothing talks to Telegram: the bot gets a fake API, fake services and synthetic updates, and the token is a dummy.
 
-**Cases:** 72
+**Cases:** 76
 
 Contract: `createBot({ api, founderChatId, decisions, policyTools, orchestrator?, onError? })` returns `handleUpdate(update)`, `pushCard(decision)` and `notifyReminder(decision)`; `createTelegramApi({ token, fetchImpl })` and `createPoller({ api, handle, sleep, onError })` are the thin layers around it. The full contract is in the header of the suite file.
 
@@ -539,7 +541,7 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were each introduced i
 
 Suite: `.claude/evals/suites/runtime-core.js`. No dataset; each case is a check function with an in-memory fake store that records every call. Code under test: `src/runtime/config.js`, `audit.js`, `runtime.js`, `commands.js` and `src/ipc-guard.js`.
 
-**Cases:** 33
+**Cases:** 35
 
 Contract: the full contract (function signatures, error codes, the store interface) is in the header of the suite file. Nothing here touches Electron, the network or a real database, so it runs in milliseconds. The Electron wiring (`src/main.js`, `src/ipc.js`, `src/preload.js`) is covered by the `invariants` checks, and by launching the real app (see PLAN.md step 1.2).
 
@@ -559,7 +561,7 @@ Checked by mutation on Nov 21, 2026: 8 realistic mistakes were introduced into t
 
 Suite: `.claude/evals/suites/decisions-service.js`. No dataset; each case is a check function. Code under test: `src/runtime/decisions.js`. Unit tests (`src/runtime/decisions.test.js`, 19 tests, and three end-to-end tests in `runtime.integration.test.js`) back it up against an in-memory store that adds delays between every step.
 
-**Cases:** 32
+**Cases:** 33
 
 How it works: the cases run the service against a **real Postgres with the real migrations** (`scripts/fake-supabase.js`: PGlite behind real HTTP, using the runtime's own REST store), so the integrity triggers are live and "two answers at once" is two real concurrent requests. Each case starts from an empty `decisions` table and logs every write, so it can check the order (audit first) and that a refused call wrote nothing. The full contract (`create`, `resolve`, `cancel`, `get`, `remindDue`, `DecisionError`) is in the header of the suite file.
 
@@ -657,6 +659,22 @@ Suite: `.claude/evals/suites/teams-view.js`. Code under test: `src/renderer/team
 **Cases:** 11
 
 Covers: a team's status says what needs a person first (blocked), then what is being worked on, then what waits, then caught up, no work yet or not started; every task state has a row in plain words and a count cut at its limit shows a plus sign; agents show role and state in plain words and an unknown one is still shown; open tasks say their state, who has them and how long ago they started; a blocked task always shows why; text from the database is passed through as text and never turned into markup; odd or missing fields never throw; the page headline, the order of the teams and the updated label; a `tasks.changed` announcement and the runtime becoming ready mean load again; the page component has no way to build markup from text, **no timer that polls the runtime** (every call is audited), refreshes on announcements, on focus and from a button, and reaches the runtime only through `window.api`; and end to end with the real overview, a change in the data changes what the page shows on the next load. Checked by mutation on Nov 25, 2026: putting "working" above "blocked" and adding a polling timer to the page were each caught.
+
+### daily-brief
+
+Suite: `.claude/evals/suites/daily-brief.js`. Code under test: `src/runtime/brief.js` (over an in-memory store and the REAL decisions service, plus one case on the real tables of a Postgres) and the rules for `src/renderer/BriefPanel.jsx` (read as text).
+
+**Cases:** 9
+
+Covers: the six sections in order (Waiting for you, Revenue, Leads, Tickets, Deployments, Spend requests); **revenue and deployments say plainly "Not tracked yet" and show no number**, because no payments and no deployment tool are connected; the date and time in the headline are in IST (including just after midnight); waiting decisions are counted by kind and blocked tasks are added, and the headline adds them up; leads are counted with the new ones of the last 24 hours exactly and the latest names are shown as text (cut and stripped of control characters); tickets show open, in progress, and what was answered or sent to the founder in the last 24 hours; spend requests show what waits with the amount in rupees and dollars (or only the one that is known, or none) and what was decided in the last 24 hours; the Telegram text is built only from the same lines, has no markup and stays under 3,500 characters; it runs on the real tables and a failing store throws; and the window's panel draws only those lines as text, has no timer, and refreshes on announcements, on focus and from a button. Decisions are read only through `decisions.summary`, never from their table.
+
+### morning-digest
+
+Suite: `.claude/evals/suites/morning-digest.js`. Code under test: `src/runtime/telegram/digest.js`, on a fake clock and fake timers with an in-memory ledger.
+
+**Cases:** 11
+
+Covers: the setting defaults to 09:00, can be turned off with `off`, and a bad value says so without repeating it; the date and time are worked out in IST whatever the computer's zone; **the digest goes out once a day at the set time and not before**; **the text sent is the brief's own text, built from the lines the window shows**; an app started after the set time sends at once but only within six hours of it; a restart the same day does not send it again (the day's send is in the audit log) and a custom time is respected; the attempt is recorded before anything is sent and if it cannot be recorded nothing is sent; a failed send is tried again after five minutes, at most six times a day, and succeeds or gives up; a brief that cannot be made or a ledger that cannot be read sends nothing and is tried again; overlapping checks send once and `stop` ends the job; and a job without what it needs does nothing and never throws. Checked by mutation on Nov 25, 2026: sending before recording, and skipping the "already sent today" lookup, were each caught.
 
 ## Planned evals (not built yet)
 

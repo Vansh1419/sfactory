@@ -582,6 +582,33 @@ const checks = [
       return verdict(r.status === 'pending' && r.resolved_at === null && r.deadline_at !== null, `status ${r?.status}, resolved_at ${r?.resolved_at}`);
     },
   },
+  {
+    // The daily brief (step 2.6) reads decisions only through this method, so this service stays the one place that knows how a status and a
+    // resolution are stored. It is read only and gives kinds and amounts, never a card's words.
+    id: 'summary-gives-what-waits-and-what-was-decided-since-a-moment-as-kinds-and-amounts-and-never-a-cards-words',
+    async check() {
+      const c = await setup();
+      const before = new Date(Date.now() - 60_000).toISOString();
+      const spendA = await file(c, { amountInr: 5000, amountUsd: 60 });
+      const spendB = await file(c);
+      await file(c, { action: LEGAL });
+      await c.service.resolve({ id: spendA.id, decision: 'approved', via: 'dashboard' });
+      await c.service.resolve({ id: spendB.id, decision: 'rejected', via: 'telegram' });
+      const out = await c.service.summary({ since: before });
+      const future = await c.service.summary({ since: new Date(Date.now() + 3_600_000).toISOString() });
+      const odd = [await c.service.summary(), await c.service.summary({ since: 'not a time' }), await c.service.summary({ since: 5 })];
+      const text = json(out);
+      c.log.length = 0;
+      await c.service.summary({ since: before });
+      c.state.blocked = 'The runtime cannot write its audit log.';
+      const err = await thrown(() => c.service.summary({ since: before }));
+      return verdict(out.waiting.length === 1 && out.waiting[0].category === 'legal_or_public' && out.waiting[0].amountInr === null && Object.keys(out.waiting[0]).sort().join() === 'amountInr,amountUsd,category'
+        && out.decided.map((d) => `${d.category}:${d.status}`).sort().join() === 'spend:approved,spend:rejected' && Object.keys(out.decided[0]).sort().join() === 'category,status'
+        && future.decided.length === 0 && future.waiting.length === 1 && odd.every((r) => r.decided.length === 0 && r.waiting.length === 1)
+        && !text.includes(GOOD_CARD.decide) && !text.includes('razorpay') && !/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text)
+        && c.log.length === 0 && err !== null, `${text} | writes ${c.log.length} | err ${err?.message}`);
+    },
+  },
 ];
 
 module.exports = {

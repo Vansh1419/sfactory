@@ -240,7 +240,9 @@ const checks = [
     // ticket only with a real reply) and taken, released and escalated by teams/support.js (step 2.4). The store uses the service key,
     // which bypasses row-level security, so no other module may read or write the tickets table.
     check() {
-      const allowed = [path.join('src', 'runtime', 'tools', 'tickets.js'), path.join('src', 'runtime', 'teams', 'support.js')];
+      // brief.js (step 2.6) is the one deliberate exception: it only COUNTS tickets by status for the daily brief and never reads or shows a
+      // customer's words (the `daily-brief` eval checks the lines it makes).
+      const allowed = [path.join('src', 'runtime', 'tools', 'tickets.js'), path.join('src', 'runtime', 'teams', 'support.js'), path.join('src', 'runtime', 'brief.js')];
       const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
       const offenders = walk(path.join(ROOT, 'src'))
         .filter((f) => /\.(c|m)?jsx?$/.test(f) && !/\.test\.(c|m)?js$/.test(f))

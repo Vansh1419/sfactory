@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import ApprovalQueue from './ApprovalQueue.jsx';
+import BriefPanel from './BriefPanel.jsx';
 import GoalsPanel from './GoalsPanel.jsx';
 import TeamsPanel from './TeamsPanel.jsx';
 
@@ -56,6 +57,7 @@ export default function App() {
         {status?.ok && status.data.problem && <p className="mt-3 text-sm text-red-700">{status.data.problem}</p>}
       </section>
 
+      <BriefPanel ready={Boolean(ready)} />
       <GoalsPanel ready={Boolean(ready)} />
       <ApprovalQueue ready={Boolean(ready)} />
       <TeamsPanel ready={Boolean(ready)} />

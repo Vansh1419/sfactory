@@ -33,8 +33,9 @@ const CATEGORY_BY_CODE = Object.fromEntries(Object.values(ASK_CATEGORIES).map((c
 const CATEGORY_LABEL = Object.fromEntries(Object.values(ASK_CATEGORIES).map((c) => [c.category, c.label]));
 const ACCESS_BY_CODE = { r: 'read', w: 'write' };
 
+const BRIEF_UNAVAILABLE = 'The brief is not available right now.';
+
 const NOT_YET = {
-  brief: 'The morning brief is not available yet. It arrives once the teams are running.',
   status: 'Team status is not available yet. It arrives once the teams are running.',
   pause: 'Pausing an agent is not available yet. It arrives with the agent controls.',
 };
@@ -46,7 +47,7 @@ const HELP = [
   '/addtool <tool> routine <read|write> - let it run without asking (needs your Yes)',
   '/removetool <tool> - remove a tool you added',
   '/goal <what you want done> - give the team a goal',
-  '/brief - morning brief (not available yet)',
+  '/brief - today\'s brief (leads, tickets, spend requests and what is waiting for you)',
   '/status <team> - team status (not available yet)',
   '/pause <agent> - pause an agent (not available yet)',
   '/help - this list',
@@ -162,7 +163,7 @@ function describeRule(rule) {
   return rule.status === 'proposed' ? `${base} - waiting for your Yes` : base;
 }
 
-function createBot({ api, founderChatId, decisions, policyTools, orchestrator, onError = () => {} }) {
+function createBot({ api, founderChatId, decisions, policyTools, orchestrator, briefText, onError = () => {} }) {
   const founder = Number(founderChatId);
   const reply = (text, buttons) => api.sendMessage({ chatId: founder, text, buttons });
   const toast = (callbackId, text) => api.answerCallback({ id: callbackId, text: clip(text, MAX_TOAST_CHARS) });
@@ -242,6 +243,8 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, o
       case 'goal':
         return startGoal(rest);
       case 'brief':
+        // The same text the morning digest sends and the window shows (brief.js builds it from the brief's own lines).
+        return reply(typeof briefText === 'function' ? await briefText() : BRIEF_UNAVAILABLE);
       case 'status':
       case 'pause':
         return reply(NOT_YET[cmd]);
@@ -393,7 +396,13 @@ function createBot({ api, founderChatId, decisions, policyTools, orchestrator, o
     return reply(describeRun(result));
   }
 
-  return { handleUpdate, pushCard, notifyReminder, announceRun };
+  /** Send the founder a plain message that is not an answer to anything (the morning digest). */
+  async function announce(text) {
+    if (typeof text !== 'string' || text.trim() === '') return null;
+    return reply(text);
+  }
+
+  return { handleUpdate, pushCard, notifyReminder, announceRun, announce };
 }
 
 module.exports = { createBot };
