@@ -1,17 +1,20 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { createApp } = require('./runtime');
 const { setupIpc } = require('./ipc');
+const { createBackground } = require('./background');
 
 // electron-vite builds to out/main, out/preload and out/renderer.
 const RENDERER_FILE = path.join(__dirname, '../renderer/index.html');
 
 let sfactory; // the runtime and its database connection
 let ipc;
+let background; // the tray, and what closing the window does
 
 function createWindow() {
   const win = new BrowserWindow({
+    show: false, // shown by the background controller when the page is ready (and not at all when the system started the app hidden at login)
     width: 900,
     height: 600,
     webPreferences: {
@@ -31,6 +34,7 @@ function createWindow() {
   } else {
     win.loadFile(RENDERER_FILE);
   }
+  return win;
 }
 
 /** Create the runtime and the IPC bridge. Synchronous, so the bridge exists before the page loads. */
@@ -51,17 +55,19 @@ function initRuntime() {
 
 app.whenReady().then(() => {
   initRuntime();
-  createWindow();
+  // The tray (step 4.4): closing the window only hides it, so the runtime, the Telegram bot and the autoscaler keep working in the background.
+  // "Quit sfactory" in the tray, or the system's own quit, is what really ends the app.
+  background = createBackground({ app, Tray, Menu, nativeImage, createWindow });
+  background.start();
   // Records that the runtime started, or blocks it (and says why) if the database is not ready.
   sfactory.start();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  app.on('activate', () => background.showWindow());
 });
 
 let quitting = false;
 app.on('before-quit', (event) => {
+  background?.markQuitting(); // from here the window may really close
   if (quitting || !sfactory) return;
   event.preventDefault();
   quitting = true;
@@ -72,6 +78,5 @@ app.on('before-quit', (event) => {
   });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+// With the tray there is always something to bring the window back, so the app keeps running (see background.windowsClosed).
+app.on('window-all-closed', () => background?.windowsClosed());
