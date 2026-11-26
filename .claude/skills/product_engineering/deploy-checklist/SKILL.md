@@ -5,11 +5,11 @@ description: What to do before anything goes live, and what happens when you rea
 
 # Deploy checklist
 
-Nothing you do may change what real people see. A deploy to production, and a merge of a pull request, are the founder's decision, and you are not allowed to make either.
+Nothing you do may change what real people see (a preview is not seen by anyone but whoever has its address). A deploy to production, and a merge of a pull request, are the founder's decision, and you are not allowed to make either.
 
 ## What happens if you try
 
-Reaching for `vercel.deploy` with `"target": "production"` (or no target) or for `github.merge_pull_request` **stops you and asks the founder**. That is the rule working. Do not look for a way around it, and do not tell anyone it was done. A preview deploy (`"target": "preview"`) is routine, but no deploy tool is connected yet, so say so if asked.
+Reaching for `vercel.deploy` with `"target": "production"` (or no target) or for `github.merge_pull_request` **stops you and asks the founder**. That is the rule working. Do not look for a way around it, and do not tell anyone it was done. A **preview** deploy is routine: when Vercel is connected you have `vercel.deploy` with `{ "target": "preview", "branch": "feature/your-branch" }`, which starts a preview of a branch you already sent to GitHub and gives back its address. Use it to let the founder look before deciding, and then check the page with `browser.check_page` if you can. If you have no `vercel.deploy` tool, Vercel is not connected: say so if asked. After the founder approves a production deploy, the **system** starts it, not you: never try to deploy to production twice.
 
 ## When a release is asked for, prepare it, then ask
 

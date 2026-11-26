@@ -51,6 +51,9 @@ const { createAutoscaler } = require('./autoscaler');
 const { createGuardrails } = require('./guardrails');
 const { createAuditSearch } = require('./audit-search');
 const { createSettings } = require('./settings');
+const { createVercelApi, createVercelTools } = require('./tools/vercel');
+const { createSentryTools } = require('./tools/sentry');
+const { createDeployer } = require('./deployer');
 const { createPods } = require('./pods/service');
 const { createSpecialists } = require('./specialists');
 const { createPodFiles } = require('./pods/files');
@@ -78,7 +81,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     const runtime = createRuntime({ audit: refuse });
     registerCommands(runtime, { store: null, version });
     runtime.block(`The runtime is not set up: ${loaded.problems.join('; ')}.`);
-    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, autoscaler: null, guardrails: null, auditSearch: null, settings: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
+    return { runtime, decisions: null, policyTools: null, router: null, telegram: null, orchestrator: null, outbound: null, agents: null, sales: null, support: null, engineering: null, finance: null, specialists: null, pods: null, podFiles: null, agentControl: null, agentEvents: null, taskResumer: null, deployer: null, autoscaler: null, guardrails: null, auditSearch: null, settings: null, problems: loaded.problems, async start() { return { ok: false }; }, async stop() { await runtime.stop(); } };
   }
 
   const { url, serviceKey } = loaded.config.supabase;
@@ -145,6 +148,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const pods = createPods({ store, audit, decisions, runtime, templatesDir: podTemplatesDir, root: env.PODS_ROOT || podsRoot, allowedRepos: (env.GITHUB_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean), isBlocked, onError: () => runtime.emit('pods.error', {}) });
   // The project view's files panel (step 3.6): the founder reads, edits and adds files in a pod's folder; an edit is committed and locks the file for agents.
   const podFiles = createPodFiles({ store, audit, podFolder: (podId) => pods.folderFor(podId), isBlocked, emit });
+  const vercelApi = createVercelApi({ token: env.VERCEL_TOKEN, teamId: env.VERCEL_TEAM_ID, fetchImpl });
   // The Filesystem tools read inside ONE folder: FILESYSTEM_ROOT, or the app's own folder when main.js passes it.
   // With neither there are no filesystem tools (never a default of "the whole disk").
   const filesystemTools = createFilesystemTools({ root: env.FILESYSTEM_ROOT || filesystemRoot, podFolder: (podId) => pods.folderFor(podId), podsRoot: env.PODS_ROOT || podsRoot });
@@ -167,6 +171,10 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     // A file the founder has open in the project view is refused to agents until it is saved (step 3.6).
     ...createPodFileTools({ podFolder: (podId) => pods.folderFor(podId), isLocked: (q) => podFiles.isLocked(q) }),
     ...createContext7Tools({ apiKey: env.CONTEXT7_API_KEY, fetchImpl }),
+    // A preview deploy of a branch of the project's own repository, and the live product's recent errors (step 4.5). Each exists only with its settings.
+    // A PRODUCTION deploy is never a tool: it is a card, and the deployer starts it after the founder approves.
+    ...createVercelTools({ api: vercelApi, podRepo: (podId) => pods.repoFor(podId) }),
+    ...createSentryTools({ token: env.SENTRY_AUTH_TOKEN, org: env.SENTRY_ORG, fetchImpl, podRepo: (podId) => pods.repoFor(podId) }),
     ...createBrowserTools({ driver: loadPlaywrightDriver() }),
     ...createOutboundTools({ outbound }),
     // The Marketing and Sales team's tools (step 2.3). Search needs TAVILY_API_KEY; Gmail and Drive need all three GOOGLE_*
@@ -223,6 +231,8 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
   const taskResumer = createTaskResumer({ store, audit, decisions, runtime, teams: { product_engineering: engineering, finance_legal_ops: finance }, emit, isBlocked, onError: () => runtime.emit('teams.error', {}) });
   // Autoscaling (step 4.1): an agent is added when a team's queue grows (up to its cap, then a card asks you), idle copies are removed, and a project space
   // whose project has ended is closed. AUTOSCALE_EVERY_SECONDS is how often it looks (default 60; "off" turns it off).
+  // The production deploy after the founder says yes (step 4.5): trusted code starts it, once, from the project's own repository, and tells the phone how it went.
+  const deployer = createDeployer({ store, audit, decisions, runtime, api: vercelApi, repoFor: (podId) => pods.repoFor(podId), isBlocked, emit, onError: () => runtime.emit('deploy.error', {}) });
   const autoscaler = createAutoscaler({ store, audit, decisions, runtime, emit, isBlocked, onError: () => runtime.emit('autoscale.error', {}) });
   const autoscaleEvery = /^off$/i.test(String(env.AUTOSCALE_EVERY_SECONDS ?? '').trim()) ? null : (Number.isInteger(Number(env.AUTOSCALE_EVERY_SECONDS)) && Number(env.AUTOSCALE_EVERY_SECONDS) >= 10 ? Number(env.AUTOSCALE_EVERY_SECONDS) : 60);
   // The phone's follow-up after an answer comes from whichever team filed the card.
@@ -287,6 +297,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
     agentControl,
     agentEvents,
     taskResumer,
+    deployer,
     autoscaler,
     guardrails,
     auditSearch,
@@ -316,6 +327,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
         telegram?.start();
         orchestrator.start(); // listens for answers, then recovers waiting runs in the background
         if (autoscaleEvery !== null) autoscaler.start({ everySeconds: autoscaleEvery }); // adds, removes and closes as the work grows and ends
+        deployer.start(); // starts a production deploy whose card the founder approved (also while the app was closed)
         taskResumer.start(); // carries on with tasks whose cards the founder approved (also while the app was closed)
         pods.start(); // listens for the founder's answers on pod cards, then opens any approved one that has no pod yet
         outbound.start(); // listens for the founder's answers on outbound messages, then applies any given while closed
@@ -335,6 +347,7 @@ function createApp({ env, fetchImpl, version, filesystemRoot, toolConfigDir, ski
       outbound.stop();
       pods.stop();
       taskResumer.stop();
+      deployer.stop();
       autoscaler.stop();
       if (!runtime.blockedReason()) {
         try {

@@ -94,6 +94,7 @@ const RULES = new Map([
   ['browser.check_page', { access: 'read' }],
   ['github.read_file', { access: 'read' }],
   ['github.list_pull_requests', { access: 'read' }],
+  ['sentry.list_issues', { access: 'read' }], // recent errors of a live product (step 4.5): read only
   ['github.create_pull_request', { access: 'write' }],
   ['zoho_books.create_bookkeeping_entry', { access: 'write' }],
   // Step 3.4: the Finance, Legal and Ops team writes a DRAFT invoice (GST worked out in code, no number, never sent). Routine: it changes nothing outside the app.

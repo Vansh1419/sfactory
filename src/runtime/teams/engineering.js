@@ -143,19 +143,32 @@ function createEngineeringTeam({ factory, decisions, writeCard, onError = () => 
     const known = isObject(input) && typeof input.taskId === 'string' && UUID.test(input.taskId) && typeof input.podId === 'string' && UUID.test(input.podId) && typeof input.title === 'string' && input.title.trim() !== '' && Object.hasOwn(ASKED_ABOUT, input.approvedTool);
     if (!known) return { status: 'failed', reason: 'bad_task' };
     const original = typeof input.description === 'string' ? input.description.trim().slice(0, 9000) : '';
-    const note = `The founder approved this on their card (${ASKED_ABOUT[input.approvedTool]}). That approval is only their answer. Nothing was merged or put live by it, and you have no tool that does either. Carry on with the rest of the task, and in your report say what is still left for a person to do.`;
+    const done = input.approvedTool === 'vercel.deploy'
+      ? 'The system starts the production deploy itself now that it is approved, so do not try to deploy again, and you have no tool that does it. Do not say it is live: you cannot see the result.'
+      : 'Nothing was merged or put live by it, and you have no tool that does either.';
+    const note = `The founder approved this on their card (${ASKED_ABOUT[input.approvedTool]}). That approval is only their answer. ${done} Carry on with the rest of the task, and in your report say what is still left for a person to do.`;
     return run({ podId: input.podId.toLowerCase(), title: input.title.trim(), description: original || 'No further details were given.' }, input.taskId.toLowerCase(), note);
   }
 
   /**
-   * After the founder answers a card this team filed (a merge or a deploy), say plainly what that did: nothing, because the team has no tool for either.
+   * After the founder answers a card this team filed (a merge or a deploy), say plainly what that did: a merge does nothing (the team has no tool for it); a production deploy
+   * is started by the SYSTEM (deployer.js), which reports how it went separately.
    * Null for any other card or answer.
    */
   async function describeAnswer(decision) {
     if (!isObject(decision) || !isObject(decision.action) || !Object.hasOwn(ASKED_ABOUT, decision.action.tool) || !decision.pod_id) return null;
     const about = ASKED_ABOUT[decision.action.tool];
-    if (decision.status === 'approved' && decision.task_id) return `You approved the card about ${about}. Nothing was merged or put live by that: the Engineering team cannot do it by itself. The team is picking the task up again to finish the rest, and will tell you if it needs you.`;
-    if (decision.status === 'approved') return `You approved the card about ${about}. Nothing was done: the Engineering team cannot do it by itself. The pull request is waiting on GitHub, and ${decision.action.tool === 'vercel.deploy' ? 'putting a version live is for you to do' : 'merging it is for you to do'}.`;
+    const deploy = decision.action.tool === 'vercel.deploy';
+    if (decision.status === 'approved' && decision.task_id) {
+      return deploy
+        ? `You approved the card about ${about}. The system starts the production deploy now (the Engineering team cannot do it by itself) and will tell you how it went. The team is picking the task up again to finish the rest, and will tell you if it needs you.`
+        : `You approved the card about ${about}. Nothing was merged or put live by that: the Engineering team cannot do it by itself. The team is picking the task up again to finish the rest, and will tell you if it needs you.`;
+    }
+    if (decision.status === 'approved') {
+      return deploy
+        ? `You approved the card about ${about}. The system starts the production deploy now (the Engineering team cannot do it by itself) and will tell you how it went.`
+        : `You approved the card about ${about}. Nothing was done: the Engineering team cannot do it by itself. The pull request is waiting on GitHub, and merging it is for you to do.`;
+    }
     if (decision.status === 'rejected') return `You said no to the card about ${about}. Nothing was done, and nothing will be unless you ask again.`;
     return null;
   }

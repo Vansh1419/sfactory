@@ -6,8 +6,10 @@
 # in src/runtime/tools/index.js), so of the shared tools only the project-folder, database, GitHub, open-web and draft tools can be used there,
 # and the GitHub tools work on the pod's own repository only.
 #
-# There is no tool that merges a pull request or deploys: reaching for `github.merge_pull_request` or `vercel.deploy` (production) stops the agent
-# and files a card for the founder (the ask-rules in src/runtime/policy.js).
+# There is no tool that merges a pull request or deploys to production: reaching for `github.merge_pull_request` or `vercel.deploy` (production) stops the agent
+# and files a card for the founder (the ask-rules in src/runtime/policy.js); after the founder approves a production deploy, the SYSTEM starts it (src/runtime/deployer.js),
+# never an agent. `vercel.deploy` here is the PREVIEW tool (a branch of the project's own repository; it exists only with VERCEL_TOKEN), and
+# `sentry.list_issues` lists a live product's recent errors (read only; only with SENTRY_AUTH_TOKEN and SENTRY_ORG).
 tools:
   # Knowing the project, and the work a pull request is made from.
   pod.info: read
@@ -28,3 +30,7 @@ tools:
   context7.search_library: read
   context7.get_docs: read
   browser.check_page: read
+
+  # A preview of a branch, and the live product's recent errors (step 4.5). Each exists only when its settings are in .env.
+  vercel.deploy: write
+  sentry.list_issues: read

@@ -287,8 +287,8 @@ const cases = [
       const spend = await w.decisions.create({ action: { tool: 'razorpay.create_payout', access: 'write', args: {} }, card: (await decisionRow(w, asked[0].decisionId)).card });
       await w.decisions.resolve({ id: spend.id, decision: 'approved', via: 'telegram' });
       const others = [await team.describeAnswer(await w.decisions.get(spend.id)), await team.describeAnswer(null), await team.describeAnswer({}), await team.describeAnswer({ action: { tool: 'vercel.deploy' }, status: 'approved' })];
-      const ok = approved === 'You approved the card about putting a version live. Nothing was merged or put live by that: the Engineering team cannot do it by itself. The team is picking the task up again to finish the rest, and will tell you if it needs you.'
-        && approvedNoTask === 'You approved the card about putting a version live. Nothing was done: the Engineering team cannot do it by itself. The pull request is waiting on GitHub, and putting a version live is for you to do.'
+      const ok = approved === 'You approved the card about putting a version live. The system starts the production deploy now (the Engineering team cannot do it by itself) and will tell you how it went. The team is picking the task up again to finish the rest, and will tell you if it needs you.'
+        && approvedNoTask === 'You approved the card about putting a version live. The system starts the production deploy now (the Engineering team cannot do it by itself) and will tell you how it went.'
         && rejected === 'You said no to the card about putting a version live. Nothing was done, and nothing will be unless you ask again.' && others.every((o) => o === null);
       return verdict(ok, json({ approved, rejected, others }));
     },

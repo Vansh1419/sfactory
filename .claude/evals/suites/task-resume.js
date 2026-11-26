@@ -137,7 +137,7 @@ const cases = [
     },
   },
   {
-    id: 'b-approving-a-deploy-card-puts-the-same-task-back-and-the-team-carries-on-told-that-nothing-was-put-live',
+    id: 'b-approving-a-deploy-card-puts-the-same-task-back-and-the-team-carries-on-told-the-system-does-the-deploy',
     async check() {
       const { w, events } = await world('b');
       const { b, r } = await blockedDeploy(w);
@@ -157,7 +157,7 @@ const cases = [
       const notice = events.at(-1)?.data;
       const pending = (await w.store.select('decisions', { where: { status: 'pending' }, limit: 500 })).length;
       return verdict(task.status === 'done' && (await tasksCount(w)) === before && task.blocked_reason === null && audits.indexOf('task.resumed') !== -1 && audits.indexOf('task.resumed') < audits.indexOf('task.status_changed')
-        && devPrompts.length === 2 && /The founder approved/.test(last) && /Nothing was merged or put live/.test(last) && /left for a person/i.test(last) && notice?.kind === 'engineering' && notice.status === 'done' && pending === pendingBefore - 1
+        && devPrompts.length === 2 && /The founder approved/.test(last) && /The system starts the production deploy itself/.test(last) && /left for a person/i.test(last) && notice?.kind === 'engineering' && notice.status === 'done' && pending === pendingBefore - 1
         && (await decisionRow(w, r.decisionId)).status === 'approved' && w.github.calls.every((c) => c.method !== 'POST') && res.errors.length === 0,
         `task ${task.status}/${task.blocked_reason}; rows ${before} -> ${await tasksCount(w)}; audits ${json(audits)}; dev prompts ${devPrompts.length}; notice ${json(notice)}; errors ${res.errors.length}`);
     },
@@ -314,7 +314,7 @@ const cases = [
         ...(/taskResumer\.start\(\)/.test(app) ? [] : ['createApp does not start it']),
         ...(/taskResumer\.stop\(\)/.test(app) ? [] : ['createApp does not stop it']),
       ];
-      return verdict(/picking the task up again/i.test(approved) && /Nothing was (merged|put live|done)/i.test(approved) && !/picking the task up/i.test(noTask) && /said no/i.test(no) && problems.length === 0, `approved ${approved}; no task ${noTask}; ${problems.join('; ')}`);
+      return verdict(/picking the task up again/i.test(approved) && /system starts the production deploy/i.test(approved) && !/picking the task up/i.test(noTask) && /said no/i.test(no) && problems.length === 0, `approved ${approved}; no task ${noTask}; ${problems.join('; ')}`);
     },
   },
 ];

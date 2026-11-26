@@ -73,6 +73,7 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
   let unsubscribe = null;
   let unsubscribeRuns = null;
   let unsubscribeAnswers = null;
+  let unsubscribeDeploys = null;
   let reminders = null;
   let stopped = true;
 
@@ -134,6 +135,10 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
           if (event && typeof event.id === 'string' && ['approved', 'rejected'].includes(event.status)) followUpAnswer(event.id);
         });
       }
+      // How a production deploy went (the system starts it after you approve its card): told on the phone, whatever the window is doing.
+      unsubscribeDeploys = runtime.on('deploy.finished', (event) => {
+        if (event && typeof event.message === 'string') bot.announce(event.message).catch(onError);
+      });
       // A run that ends after the founder's answer (a tap on the phone or a click on the dashboard) is reported here.
       unsubscribeRuns = orchestrator?.onRunFinished?.((result) => bot.announceRun(result).catch(onError)) ?? null;
       reminders = startReminderJob({ service: decisions, notify: notifyReminder, onError });
@@ -151,6 +156,8 @@ function createTelegramService({ env, decisions, policyTools, orchestrator, runt
       unsubscribeRuns?.();
       unsubscribeAnswers?.();
       unsubscribeAnswers = null;
+      unsubscribeDeploys?.();
+      unsubscribeDeploys = null;
       reminders?.stop();
       digest?.stop();
       digest = null;
